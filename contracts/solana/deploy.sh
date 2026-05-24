@@ -2,6 +2,10 @@
 # Deploy acex-capital to Solana (devnet | mainnet).
 # Private key read from console — never persisted (same pattern as contracts/solana/deploy.sh).
 #
+# ⚠️  This deploys ACEX capital-markets Solana programs (acex-capital).
+#    For the root aimarket-escrow Solana program (hub escrow), use contracts/solana/deploy.sh.
+#    The two programs are INDEPENDENT with different program IDs.
+#
 # Usage:
 #   cd acex/contracts/solana
 #   ./deploy.sh devnet

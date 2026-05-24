@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # Deploy ACEX EVM contracts (Base / Ethereum via Foundry).
 #
+# ⚠️  This deploys ACEX capital-markets contracts (CapShares, AMM, etc.).
+#    For the root AIMarketEscrow contract (hub escrow), use contracts/evm/deploy.sh.
+#    The two sets are INDEPENDENT — do NOT mix them.
+#
 # Usage:
 #   export USDC_ADDRESS=0x...
 #   export DEPLOYER_PRIVATE_KEY=0x...

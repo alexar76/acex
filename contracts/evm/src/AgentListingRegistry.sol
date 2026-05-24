@@ -3,7 +3,7 @@ pragma solidity ^0.8.28;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 
 import {IAgentListingRegistry} from "./interfaces/IAgentListingRegistry.sol";
@@ -31,7 +31,7 @@ contract AgentListingRegistry is IAgentListingRegistry, Ownable, Pausable {
 
     IERC20 public immutable usdc;
 
-    constructor(address vault_, address usdc_) Ownable(msg.sender) {
+    constructor(address vault_, address usdc_) Ownable2Step(msg.sender) {
         if (vault_ == address(0) || usdc_ == address(0)) revert ZeroAddress();
         vault = AgentCollateralVault(vault_);
         usdc = IERC20(usdc_);

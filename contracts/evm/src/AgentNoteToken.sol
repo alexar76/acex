@@ -2,7 +2,7 @@
 pragma solidity ^0.8.28;
 
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 
 /// @title AgentNoteToken — AgentNotes (bond instrument ERC-20)
 /// @notice Fixed supply at issuance; redeemable at maturity via CollateralVault.
@@ -27,7 +27,7 @@ contract AgentNoteToken is ERC20, Ownable {
         uint256 supply_,
         uint64 maturity_,
         uint256 faceValue_
-    ) ERC20(name_, symbol_) Ownable(vault_) {
+    ) ERC20(name_, symbol_) Ownable2Step(vault_) {
         if (beneficiary_ == address(0)) revert();
         vault = vault_;
         listingId = listingId_;

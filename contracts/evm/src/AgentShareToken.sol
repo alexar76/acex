@@ -2,7 +2,7 @@
 pragma solidity ^0.8.28;
 
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 
 /// @title AgentShareToken — CapShares (ERC-20 per agent listing)
 /// @notice Minting restricted to listing registry until public float enabled.
@@ -22,7 +22,7 @@ contract AgentShareToken is ERC20, Ownable {
         string memory name_,
         string memory symbol_,
         uint256 maxSupply_
-    ) ERC20(name_, symbol_) Ownable(registry_) {
+    ) ERC20(name_, symbol_) Ownable2Step(registry_) {
         if (registry_ == address(0) || maxSupply_ == 0) revert();
         registry = registry_;
         listingId = listingId_;

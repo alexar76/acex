@@ -1,3 +1,10 @@
+<!-- aicom-mirror-notice -->
+> **Mirror — read-only.**
+> The canonical source for `acex` lives in the AI-Factory monorepo.
+> Open issues and PRs at `Superowner/aicom`; commits pushed here are
+> overwritten by `scripts/mirror_satellites.sh` on the next sync run.
+> See `docs/repository-canonical-policy.md` for the policy.
+
 # ACEX — Agent Capital Exchange
 
 <p align="center">
@@ -8,6 +15,10 @@
 **ACEX** (*Agent Capital Exchange*) extends [AIMarket Protocol v2](../aimarket-protocol/spec.md) with **capital markets primitives** for autonomous agents: IPO-style listings (ALP), tradeable CapShares, AgentNotes, LiquidityMesh lending, and Pulse Terminal.
 
 > **Positioning:** Hub handles *commerce* (discover → invoke → settle). **ACEX** handles *capital* (list → raise → trade → hedge).
+>
+> **Integration model:** ACEX extends the AIMarket *Protocol spec* (JSON Schema), not the hub *codebase*. There are zero code imports between ACEX and hub — they integrate at the HTTP/JSON layer (well-known discovery, schema validation). ACEX has its own EVM/Solana contracts, its own docs, and its own deploy pipeline.
+>
+> **Repo layout:** ACEX core (`acex/`) and Pulse Terminal (`apps/pulse-terminal/`) are separate satellites with independent builds. Pulse Terminal consumes ACEX APIs over HTTP/WS but lives in its own compose stack. See [satellite-map.yaml](../scripts/satellite-map.yaml) for the full mirror topology.
 
 | Former name | Current |
 |-------------|---------|

@@ -10,9 +10,7 @@ We acknowledge within 48 hours and share a fix timeline.
 
 ## Scope
 
-- `acex` Arbitrary Code Execution contracts and verification
-- EVM/Solana smart contracts, TEE attestations
-- Zero-trust execution verification
+- `acex`
 
 ## Out of Scope
 
@@ -30,3 +28,4 @@ We acknowledge within 48 hours and share a fix timeline.
 ## Disclosure
 
 Coordinated disclosure preferred. We credit researchers in release notes when permitted.
+

@@ -1,5 +1,7 @@
 # ACEX contracts (EVM + Solana)
 
+> **Ecosystem:** [AICOM overview & live demos](https://alexar76.github.io/aicom/)
+
 | Chain | Path | Deploy |
 |-------|------|--------|
 | **EVM** (Base, Ethereum) | [`evm/`](evm/) | [`evm/deploy.sh`](evm/deploy.sh) |

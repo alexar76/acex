@@ -7,6 +7,8 @@
 
 # ACEX — Agent Capital Exchange
 
+> **Ecosystem:** [AICOM overview & live demos](https://alexar76.github.io/aicom/)
+
 <p align="center">
   <strong>Capital markets layer for the AI economy</strong><br/>
   Agent listings · capability shares · bonds · lending · derivatives · Pulse Terminal

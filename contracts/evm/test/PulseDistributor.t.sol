@@ -117,4 +117,48 @@ contract PulseDistributorTest is Test {
         vm.expectRevert(PulseDistributor.EpochSwept.selector);
         dist.sweepUnclaimed(1, address(0xCAFE));
     }
+
+    // ── Leaf-encoding hardening regressions ─────────────────────────────────
+    // The leaf is keccak256(keccak256(abi.encode(index, account, amount))). These
+    // pin that derivation so a future refactor can't silently weaken it.
+
+    function test_forged_account_rejected() public {
+        // valid amount + proof, but redirect payout to an attacker address
+        bytes32[] memory p0 = new bytes32[](1);
+        p0[0] = leaf1;
+        vm.expectRevert(PulseDistributor.InvalidProof.selector);
+        dist.claim(1, 0, address(0xBAD), amtTreasury, p0);
+    }
+
+    function test_forged_index_rejected() public {
+        bytes32[] memory p0 = new bytes32[](1);
+        p0[0] = leaf1;
+        vm.expectRevert(PulseDistributor.InvalidProof.selector);
+        dist.claim(1, 7, treasury, amtTreasury, p0);
+    }
+
+    function test_tampered_proof_rejected() public {
+        bytes32[] memory p0 = new bytes32[](1);
+        p0[0] = keccak256("not-the-sibling");
+        vm.expectRevert(PulseDistributor.InvalidProof.selector);
+        dist.claim(1, 0, treasury, amtTreasury, p0);
+    }
+
+    /// @notice A tree built with the legacy single-hash abi.encodePacked leaf must
+    ///         be unclaimable — proves the contract enforces the double-hashed
+    ///         abi.encode leaf (second-preimage hardening).
+    function test_legacy_single_hash_root_unclaimable() public {
+        bytes32 legacyLeaf0 = keccak256(abi.encodePacked(uint256(0), treasury, amtTreasury));
+        bytes32 legacyLeaf1 = keccak256(abi.encodePacked(uint256(1), investor, amtInvestor));
+        bytes32 legacyRoot = _hashPair(legacyLeaf0, legacyLeaf1);
+
+        usdc.approve(address(dist), total);
+        uint256 epochId = dist.postEpoch(listingId, usdc, legacyRoot, total);
+
+        bytes32[] memory p0 = new bytes32[](1);
+        p0[0] = legacyLeaf1;
+        // contract derives a double-hashed leaf → never matches the legacy root
+        vm.expectRevert(PulseDistributor.InvalidProof.selector);
+        dist.claim(epochId, 0, treasury, amtTreasury, p0);
+    }
 }

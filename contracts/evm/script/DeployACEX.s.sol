@@ -6,6 +6,7 @@ import {Script, console2} from "forge-std/Script.sol";
 import {AgentCollateralVault} from "../src/AgentCollateralVault.sol";
 import {AgentListingRegistry} from "../src/AgentListingRegistry.sol";
 import {AgentLendingPool} from "../src/AgentLendingPool.sol";
+import {AgentAuditPool} from "../src/AgentAuditPool.sol";
 import {PulseAMM} from "../src/PulseAMM.sol";
 
 /// @notice Deploy ACEX EVM stack. Set USDC_ADDRESS in env.
@@ -23,6 +24,9 @@ contract DeployACEX is Script {
         AgentLendingPool lending = new AgentLendingPool(usdc, address(vault), address(registry));
         vault.setLendingPool(address(lending));
         PulseAMM amm = new PulseAMM();
+        AgentAuditPool auditPool =
+            new AgentAuditPool(address(registry), address(vault), usdc, address(amm));
+        registry.setAuditPool(address(auditPool));
 
         vm.stopBroadcast();
 
@@ -30,5 +34,6 @@ contract DeployACEX is Script {
         console2.log("AgentListingRegistry", address(registry));
         console2.log("AgentLendingPool", address(lending));
         console2.log("PulseAMM", address(amm));
+        console2.log("AgentAuditPool", address(auditPool));
     }
 }

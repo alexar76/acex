@@ -11,22 +11,29 @@ Extends [AIMarket Protocol v2](../../aimarket-protocol/spec.md) with **capital m
 
 ```
 Agent → apply(listing_id, metadata_hash)
-Auditor → record_audit(score_bps)
+Auditor(s) → AgentAuditPool.coverListing(cover_usdc, score_bps)   [Proof-of-Audit]
+           OR legacy allowlisted auditor → record_audit(score_bps)
 Admin → approve(name, symbol, max_supply) → CapShare ERC-20 / SPL mint
 Optional → issue_agent_notes(collateral_usdc, maturity, face_value)
+Revenue → fundAuditRewards → auditors claimAuditReward
+Default → triggerDefault (TWAP −50%) → note holders claimDefaultCompensation
 ```
 
 | Field | Rule |
 |-------|------|
 | `MIN_AUDIT_SCORE_BPS` | 7000 (70%) |
+| `MIN_STAKE_USDC` | 10_000 (Proof-of-Audit) |
 | Collateral | USDC / USDC-SPL only |
 | Listing status | Pending → UnderAudit → Approved \| Rejected |
+
+See [proof-of-audit.md](./proof-of-audit.md) for the staked auditor market.
 
 ## On-chain deployments
 
 | Module | EVM | Solana |
 |--------|-----|--------|
 | Registry | `AgentListingRegistry` | `acex_capital::apply/approve` |
+| Audit pool | `AgentAuditPool` | Phase 2 |
 | Vault | `AgentCollateralVault` | `deposit_collateral` |
 | Shares | `AgentShareToken` | SPL mint (off-chain + approve ix) |
 | Notes | `AgentNoteToken` | Phase 2 |

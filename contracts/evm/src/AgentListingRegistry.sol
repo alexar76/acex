@@ -8,12 +8,13 @@ import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 
 import {IAgentListingRegistry} from "./interfaces/IAgentListingRegistry.sol";
+import {IAgentAuditPool} from "./interfaces/IAgentAuditPool.sol";
 import {AgentShareToken} from "./AgentShareToken.sol";
 import {AgentNoteToken} from "./AgentNoteToken.sol";
 import {AgentCollateralVault} from "./AgentCollateralVault.sol";
 
 /// @title AgentListingRegistry — ALP (Agent Listing Protocol)
-/// @notice IPO-style listing: apply → audit → mint CapShares → optional AgentNotes.
+/// @notice IPO-style listing: apply → Proof-of-Audit → mint CapShares → optional AgentNotes.
 contract AgentListingRegistry is IAgentListingRegistry, Ownable2Step, Pausable {
     using SafeERC20 for IERC20;
 
@@ -33,6 +34,10 @@ contract AgentListingRegistry is IAgentListingRegistry, Ownable2Step, Pausable {
     mapping(address => bool) public auditors;
     mapping(address => bool) public pulseMarketMakers;
 
+    /// @notice Proof-of-Audit pool (permissionless staked auditors). Zero = legacy allowlist only.
+    address public auditPool;
+    bool private _auditPoolSet;
+
     IERC20 public immutable usdc;
 
     constructor(address vault_, address usdc_) Ownable(msg.sender) {
@@ -43,6 +48,12 @@ contract AgentListingRegistry is IAgentListingRegistry, Ownable2Step, Pausable {
 
     function setAuditor(address auditor, bool allowed) external onlyOwner {
         auditors[auditor] = allowed;
+    }
+
+    function setAuditPool(address pool_) external onlyOwner {
+        if (_auditPoolSet || pool_ == address(0)) revert ZeroAddress();
+        auditPool = pool_;
+        _auditPoolSet = true;
     }
 
     function setMarketMaker(address mm, bool allowed) external onlyOwner {
@@ -69,7 +80,7 @@ contract AgentListingRegistry is IAgentListingRegistry, Ownable2Step, Pausable {
     }
 
     function recordAudit(bytes32 listingId, uint256 auditScoreBps) external whenNotPaused {
-        if (!auditors[msg.sender]) revert();
+        if (msg.sender != auditPool && !auditors[msg.sender]) revert();
         Listing storage L = listings[listingId];
         if (L.status != ListingStatus.Pending && L.status != ListingStatus.UnderAudit) {
             revert InvalidStatus();
@@ -132,6 +143,10 @@ contract AgentListingRegistry is IAgentListingRegistry, Ownable2Step, Pausable {
         L.status = ListingStatus.Approved;
         L.listedAt = uint64(block.timestamp);
 
+        if (auditPool != address(0)) {
+            IAgentAuditPool(auditPool).onListingApproved(listingId);
+        }
+
         emit ListingApproved(listingId, address(token), maxSupply);
     }
 
@@ -146,6 +161,9 @@ contract AgentListingRegistry is IAgentListingRegistry, Ownable2Step, Pausable {
             revert InvalidStatus();
         }
         L.status = ListingStatus.Rejected;
+        if (auditPool != address(0)) {
+            IAgentAuditPool(auditPool).onListingRejected(listingId);
+        }
         emit ListingRejected(listingId, reason);
     }
 
@@ -166,6 +184,7 @@ contract AgentListingRegistry is IAgentListingRegistry, Ownable2Step, Pausable {
         noteToken = address(
             new AgentNoteToken(
                 address(vault),
+                address(this),
                 L.agentWallet,
                 listingId,
                 name,
@@ -177,6 +196,9 @@ contract AgentListingRegistry is IAgentListingRegistry, Ownable2Step, Pausable {
         );
         vault.registerNote(listingId, noteToken);
         vault.lockForNote(listingId, (supply * faceValue) / 1e18);
+        if (auditPool != address(0)) {
+            AgentNoteToken(noteToken).setAuditPool(auditPool);
+        }
         return noteToken;
     }
 

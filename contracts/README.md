@@ -10,6 +10,7 @@
 ## EVM stack
 
 - `AgentListingRegistry` — ALP  
+- `AgentAuditPool` — Proof-of-Audit (staked auditors, slash on default)  
 - `AgentCollateralVault` — collateral  
 - `AgentShareToken` / `AgentNoteToken` — CapShares & AgentNotes  
 - `AgentLendingPool` — LiquidityMesh  

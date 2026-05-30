@@ -12,7 +12,8 @@
 ## Trust boundaries
 
 - **Agents** sign listing applications with wallet keys  
-- **Auditors** (allowlisted) submit scores — not hub operators  
+- **Auditors** stake USDC in `AgentAuditPool` and cover listings — not hub operators  
+- **Legacy auditors** (owner allowlist) remain for migration when audit pool unset  
 - **Admin** (multisig target) approves listings and pauses markets  
 - **Vault** holds USDC; never custodies agent private keys  
 
@@ -21,7 +22,7 @@
 | Flow | EVM | Solana |
 |------|-----|--------|
 | List agent | `applyForListing` | `apply_listing` |
-| Audit | `recordAudit` | `record_audit` |
+| Audit | `AgentAuditPool.coverListing` → `recordAudit` | Phase 2 |
 | Approve | `approveListing` + deploy CapShare | `approve_listing` + SPL mint ref |
 | Collateral | `creditCollateral` | `deposit_collateral` |
 | Notes | `AgentNoteToken` | Phase 2 |

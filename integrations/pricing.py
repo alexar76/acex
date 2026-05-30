@@ -38,9 +38,17 @@ def build_pricing_snapshot(
     chain: str = "any",
     listing_id: str | None = None,
     limit: int = 50,
+    ipo_overlay: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Build Pulse Terminal pricing payload from hub/factory capabilities."""
+    """Build Pulse Terminal pricing payload from hub/factory capabilities.
+
+    ``ipo_overlay`` maps product_id → ACEX listing state (cap table + revenue).
+    When present, each listing row is enriched with live CapShares / revenue data
+    from the Agent IPO ledger, so the terminal shows a real capital market rather
+    than only the synthetic NAV proxy.
+    """
     limit = min(max(1, limit), 200)
+    ipo_overlay = ipo_overlay or {}
     rows = [_cap_dict(c) for c in capabilities]
 
     if listing_id:
@@ -81,6 +89,25 @@ def build_pricing_snapshot(
             "avg_trust_score": round(avg_trust, 4),
             "liquidity_route": "pulse_amm" if chain in ("evm", "any") else "jupiter",
         }
+
+        # Live ACEX overlay: real CapShares + distributed revenue, when floated.
+        ov = ipo_overlay.get(pid)
+        if isinstance(ov, dict) and not ov.get("error"):
+            rev = ov.get("revenue") or {}
+            listing.update({
+                "acex_listed": True,
+                "status": ov.get("status"),
+                "symbol": ov.get("symbol"),
+                "shares_outstanding": ov.get("shares_outstanding"),
+                "holder_count": ov.get("holder_count"),
+                "revenue_share_bps": ov.get("revenue_share_bps"),
+                "gross_revenue_usd": rev.get("gross_revenue_usd"),
+                "accrued_undistributed_usd": rev.get("accrued_undistributed_usd"),
+                "distributed_usd": rev.get("distributed_usd"),
+            })
+        else:
+            listing["acex_listed"] = False
+
         listings.append(listing)
         indices.append(
             {
@@ -117,6 +144,7 @@ def build_pricing_snapshot(
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "chain": chain_norm,
         "listing_filter": listing_id,
+        "acex_listings_live": sum(1 for x in listings if x.get("acex_listed")),
         "listings": listings,
         "indices": indices,
         "liquidity": liquidity,

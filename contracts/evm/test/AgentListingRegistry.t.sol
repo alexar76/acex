@@ -71,4 +71,35 @@ contract AgentListingRegistryTest is Test {
         token.transfer(address(0xBEEF), 1e18);
         assertEq(token.balanceOf(address(0xBEEF)), 1e18);
     }
+
+    function test_vesting_locks_founder_tranche_until_cliff() public {
+        vm.prank(agent);
+        registry.applyForListing(listingId, bytes32(uint256(1)));
+        vm.prank(auditor);
+        registry.recordAudit(listingId, 9000);
+
+        // lock 80% of a 1,000,000 supply for 90 days
+        uint256 supply = 1_000_000e18;
+        address shareAddr =
+            registry.approveListingWithVesting(listingId, "A", "A", supply, 8_000, 90 days);
+        AgentShareToken token = AgentShareToken(shareAddr);
+
+        assertEq(token.lockedBalanceOf(agent), 800_000e18);
+
+        // can move the unlocked 20% …
+        vm.prank(agent);
+        token.transfer(address(0xBEEF), 200_000e18);
+
+        // … but not a single token more of the locked tranche
+        vm.prank(agent);
+        vm.expectRevert(AgentShareToken.TokensLocked.selector);
+        token.transfer(address(0xBEEF), 1);
+
+        // after the cliff the whole balance is free
+        vm.warp(block.timestamp + 90 days);
+        assertEq(token.lockedBalanceOf(agent), 0);
+        vm.prank(agent);
+        token.transfer(address(0xBEEF), 800_000e18);
+        assertEq(token.balanceOf(address(0xBEEF)), 1_000_000e18);
+    }
 }

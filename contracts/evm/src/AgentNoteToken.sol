@@ -17,7 +17,10 @@ contract AgentNoteToken is ERC20, Ownable2Step {
     uint64 public immutable maturity;
     uint256 public immutable faceValue; // USDC 6-decimal units per 1 note token
 
-    bool public redeemed;
+    /// @notice Cumulative note units redeemed so far. AgentNotes support partial
+    ///         redemption by multiple holders up to the vault's locked collateral,
+    ///         so this is a running total (not a one-shot flag).
+    uint256 public redeemedAmount;
 
     constructor(
         address vault_,
@@ -44,7 +47,7 @@ contract AgentNoteToken is ERC20, Ownable2Step {
 
     function burnOnRedeem(address holder, uint256 amount) external onlyVault {
         if (block.timestamp < maturity) revert NotMatured();
-        redeemed = true;
+        redeemedAmount += amount;
         _burn(holder, amount);
     }
 

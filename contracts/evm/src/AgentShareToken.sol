@@ -11,11 +11,22 @@ contract AgentShareToken is ERC20, Ownable2Step {
     error MintCapExceeded();
     error TradingLocked();
     error NotRegistry();
+    error LockAlreadySet();
+    error TokensLocked();
 
     address public immutable registry;
     bytes32 public immutable listingId;
     uint256 public immutable maxSupply;
     bool public tradingEnabled;
+
+    // Anti-rug vesting: a tranche of the founder/agent allocation that cannot be
+    // transferred (i.e. dumped on the AMM) until `lockUnlockAt`. Set once at listing
+    // approval. Zero `lockedAmount` ⇒ no lock.
+    address public lockHolder;
+    uint256 public lockedAmount;
+    uint64 public lockUnlockAt;
+
+    event InitialLockConfigured(address indexed holder, uint256 amount, uint64 unlockAt);
 
     constructor(
         address registry_,
@@ -45,9 +56,32 @@ contract AgentShareToken is ERC20, Ownable2Step {
         tradingEnabled = true;
     }
 
+    /// @notice Lock `amount` of `holder`'s allocation until `unlockAt` (one-shot).
+    ///         Used by the registry to vest the founder tranche so it can't be
+    ///         dumped on the AMM immediately after listing.
+    function setInitialLock(address holder, uint256 amount, uint64 unlockAt) external onlyRegistry {
+        if (lockHolder != address(0) || lockedAmount != 0) revert LockAlreadySet();
+        lockHolder = holder;
+        lockedAmount = amount;
+        lockUnlockAt = unlockAt;
+        emit InitialLockConfigured(holder, amount, unlockAt);
+    }
+
+    /// @notice Amount of `account`'s balance that is currently transfer-locked.
+    function lockedBalanceOf(address account) public view returns (uint256) {
+        if (account != lockHolder || block.timestamp >= lockUnlockAt) return 0;
+        return lockedAmount;
+    }
+
     function _update(address from, address to, uint256 value) internal override {
         if (!tradingEnabled && from != address(0) && to != address(0)) {
             revert TradingLocked();
+        }
+        // Vesting: the locked tranche of the founder allocation cannot leave the
+        // holder's wallet before the cliff (mint/burn — from/to == 0 — are exempt).
+        if (from != address(0)) {
+            uint256 locked = lockedBalanceOf(from);
+            if (locked != 0 && balanceOf(from) - value < locked) revert TokensLocked();
         }
         super._update(from, to, value);
     }

@@ -13,7 +13,7 @@ import {MerkleProof} from "@openzeppelin/contracts/utils/cryptography/MerkleProo
 ///         pull pattern (no holder enumeration / no per-holder push loop).
 ///
 /// Leaf encoding (must match aimarket_hub/acex_merkle.make_leaf):
-///   leaf = keccak256(abi.encodePacked(uint256 index, address account, uint256 amount))
+///   leaf = keccak256(bytes.concat(keccak256(abi.encode(uint256 index, address account, uint256 amount))))
 /// Inner nodes use OpenZeppelin's commutative (sorted) hashing via MerkleProof.
 contract PulseDistributor is Ownable {
     using SafeERC20 for IERC20;
@@ -24,7 +24,13 @@ contract PulseDistributor is Ownable {
         bytes32 merkleRoot;
         uint256 total;
         uint256 claimed;
+        uint64 postedAt;
+        bool swept;
     }
+
+    /// @notice Unclaimed funds can be reclaimed by the owner only after this delay,
+    ///         so a partially-claimed epoch never locks the remainder forever.
+    uint256 public constant SWEEP_DELAY = 180 days;
 
     uint256 public epochCount;
     mapping(uint256 => Epoch) public epochs;
@@ -38,6 +44,7 @@ contract PulseDistributor is Ownable {
         uint256 total
     );
     event Claimed(uint256 indexed epochId, uint256 indexed index, address indexed account, uint256 amount);
+    event Swept(uint256 indexed epochId, address indexed to, uint256 amount);
 
     error AlreadyClaimed();
     error InvalidProof();
@@ -45,6 +52,9 @@ contract PulseDistributor is Ownable {
     error ZeroRoot();
     error UnknownEpoch();
     error ExceedsEpochTotal();
+    error EpochSwept();
+    error SweepTooEarly();
+    error NothingToSweep();
 
     constructor(address owner_) Ownable(owner_) {
         if (owner_ == address(0)) revert ZeroAddress();
@@ -66,7 +76,9 @@ contract PulseDistributor is Ownable {
             token: token,
             merkleRoot: merkleRoot,
             total: total,
-            claimed: 0
+            claimed: 0,
+            postedAt: uint64(block.timestamp),
+            swept: false
         });
         token.safeTransferFrom(msg.sender, address(this), total);
         emit EpochPosted(epochId, listingId, address(token), merkleRoot, total);
@@ -86,9 +98,13 @@ contract PulseDistributor is Ownable {
     ) external {
         Epoch storage e = epochs[epochId];
         if (e.merkleRoot == bytes32(0)) revert UnknownEpoch();
+        if (e.swept) revert EpochSwept();
         if (_claimed[epochId][index]) revert AlreadyClaimed();
 
-        bytes32 leaf = keccak256(abi.encodePacked(index, account, amount));
+        // Double-hashed, ABI-encoded leaf (OZ/Uniswap merkle-distributor canon):
+        // abi.encode pads each field to 32 bytes (no boundary ambiguity) and the
+        // second hash blocks any leaf↔internal-node second-preimage attack.
+        bytes32 leaf = keccak256(bytes.concat(keccak256(abi.encode(index, account, amount))));
         if (!MerkleProof.verify(proof, e.merkleRoot, leaf)) revert InvalidProof();
 
         if (e.claimed + amount > e.total) revert ExceedsEpochTotal();
@@ -97,5 +113,23 @@ contract PulseDistributor is Ownable {
 
         e.token.safeTransfer(account, amount);
         emit Claimed(epochId, index, account, amount);
+    }
+
+    /// @notice Reclaim the unclaimed remainder of an epoch after {SWEEP_DELAY}.
+    /// @dev Prevents funds from being locked forever when an epoch is never fully
+    ///      claimed. Marks the epoch swept so no further claims can be made.
+    function sweepUnclaimed(uint256 epochId, address to) external onlyOwner returns (uint256 amount) {
+        if (to == address(0)) revert ZeroAddress();
+        Epoch storage e = epochs[epochId];
+        if (e.merkleRoot == bytes32(0)) revert UnknownEpoch();
+        if (e.swept) revert EpochSwept();
+        if (block.timestamp < uint256(e.postedAt) + SWEEP_DELAY) revert SweepTooEarly();
+
+        amount = e.total - e.claimed;
+        if (amount == 0) revert NothingToSweep();
+
+        e.swept = true;
+        e.token.safeTransfer(to, amount);
+        emit Swept(epochId, to, amount);
     }
 }

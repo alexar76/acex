@@ -37,8 +37,8 @@ contract PulseDistributorTest is Test {
         dist = new PulseDistributor(address(this));
 
         // index assigned by ascending address: treasury(0xA1) < investor(0xB2)
-        leaf0 = keccak256(abi.encodePacked(uint256(0), treasury, amtTreasury));
-        leaf1 = keccak256(abi.encodePacked(uint256(1), investor, amtInvestor));
+        leaf0 = keccak256(bytes.concat(keccak256(abi.encode(uint256(0), treasury, amtTreasury))));
+        leaf1 = keccak256(bytes.concat(keccak256(abi.encode(uint256(1), investor, amtInvestor))));
         root = _hashPair(leaf0, leaf1);
 
         usdc.approve(address(dist), total);
@@ -87,5 +87,34 @@ contract PulseDistributorTest is Test {
         vm.prank(address(0xdead));
         vm.expectRevert();
         dist.postEpoch(listingId, usdc, root, total);
+    }
+
+    function test_sweep_unclaimed_after_delay() public {
+        // only the investor claims; the treasury slice stays unclaimed
+        bytes32[] memory p1 = new bytes32[](1);
+        p1[0] = leaf0;
+        dist.claim(1, 1, investor, amtInvestor, p1);
+
+        // too early to sweep
+        vm.expectRevert(PulseDistributor.SweepTooEarly.selector);
+        dist.sweepUnclaimed(1, address(0xCAFE));
+
+        vm.warp(block.timestamp + dist.SWEEP_DELAY());
+        uint256 swept = dist.sweepUnclaimed(1, address(0xCAFE));
+        assertEq(swept, amtTreasury);
+        assertEq(usdc.balanceOf(address(0xCAFE)), amtTreasury);
+
+        // swept epoch rejects further claims
+        bytes32[] memory p0 = new bytes32[](1);
+        p0[0] = leaf1;
+        vm.expectRevert(PulseDistributor.EpochSwept.selector);
+        dist.claim(1, 0, treasury, amtTreasury, p0);
+    }
+
+    function test_sweep_twice_reverts() public {
+        vm.warp(block.timestamp + dist.SWEEP_DELAY());
+        dist.sweepUnclaimed(1, address(0xCAFE));
+        vm.expectRevert(PulseDistributor.EpochSwept.selector);
+        dist.sweepUnclaimed(1, address(0xCAFE));
     }
 }

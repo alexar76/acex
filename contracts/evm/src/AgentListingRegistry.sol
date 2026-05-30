@@ -23,6 +23,9 @@ contract AgentListingRegistry is IAgentListingRegistry, Ownable2Step, Pausable {
     error ZeroAddress();
 
     uint256 public constant MIN_AUDIT_SCORE_BPS = 7000; // 70%
+    uint256 public constant BPS = 10_000;
+
+    error LockBpsTooHigh();
 
     AgentCollateralVault public immutable vault;
 
@@ -82,19 +85,45 @@ contract AgentListingRegistry is IAgentListingRegistry, Ownable2Step, Pausable {
         string calldata symbol,
         uint256 maxSupply
     ) external override onlyOwner whenNotPaused returns (address shareToken) {
+        return address(_approveListing(listingId, name, symbol, maxSupply));
+    }
+
+    /// @notice Approve a listing and vest a tranche of the founder allocation: lock
+    ///         `lockBps` of `maxSupply` in the agent wallet for `lockSeconds` (cliff),
+    ///         blocking an immediate 100% dump on the AMM (anti-rug).
+    function approveListingWithVesting(
+        bytes32 listingId,
+        string calldata name,
+        string calldata symbol,
+        uint256 maxSupply,
+        uint256 lockBps,
+        uint64 lockSeconds
+    ) external onlyOwner whenNotPaused returns (address shareToken) {
+        if (lockBps > BPS) revert LockBpsTooHigh();
+        AgentShareToken token = _approveListing(listingId, name, symbol, maxSupply);
+        if (lockBps > 0 && lockSeconds > 0) {
+            token.setInitialLock(
+                listings[listingId].agentWallet,
+                (maxSupply * lockBps) / BPS,
+                uint64(block.timestamp) + lockSeconds
+            );
+        }
+        return address(token);
+    }
+
+    function _approveListing(
+        bytes32 listingId,
+        string calldata name,
+        string calldata symbol,
+        uint256 maxSupply
+    ) internal returns (AgentShareToken token) {
         Listing storage L = listings[listingId];
         if (L.status != ListingStatus.UnderAudit && L.status != ListingStatus.Pending) {
             revert InvalidStatus();
         }
         if (L.auditScoreBps < MIN_AUDIT_SCORE_BPS) revert AuditScoreTooLow();
 
-        AgentShareToken token = new AgentShareToken(
-            address(this),
-            listingId,
-            name,
-            symbol,
-            maxSupply
-        );
+        token = new AgentShareToken(address(this), listingId, name, symbol, maxSupply);
         token.mintTo(L.agentWallet, maxSupply);
         token.enableTrading();
 
@@ -104,7 +133,6 @@ contract AgentListingRegistry is IAgentListingRegistry, Ownable2Step, Pausable {
         L.listedAt = uint64(block.timestamp);
 
         emit ListingApproved(listingId, address(token), maxSupply);
-        return address(token);
     }
 
     function rejectListing(bytes32 listingId, string calldata reason)

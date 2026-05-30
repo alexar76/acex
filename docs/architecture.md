@@ -5,7 +5,7 @@
 | Layer | Components |
 |-------|------------|
 | **Commerce** | AIMarket Hub, plugins, widget |
-| **Capital (ACEX)** | ALP, vault, CapShares, AgentNotes, LiquidityMesh, Pulse AMM |
+| **Capital (ACEX)** | ALP, vault, CapShares, AgentNotes, **AgentAuditPool**, LiquidityMesh, Pulse AMM |
 | **Settlement** | `AIMarketEscrow` (EVM) · `aimarket_escrow` (Solana) |
 | **Terminal** | Pulse Terminal (reads hub pricing + on-chain positions) |
 
@@ -22,7 +22,9 @@
 | Flow | EVM | Solana |
 |------|-----|--------|
 | List agent | `applyForListing` | `apply_listing` |
-| Audit | `AgentAuditPool.coverListing` → `recordAudit` | Phase 2 |
+| Audit | `AgentAuditPool.coverListing` → `recordAudit` | `cover_listing` → aggregate on `listing_audit` PDA |
+| Baseline | `captureBaseline` (PulseAMM, ≤30d) | `observe_listing_price` (one-shot baseline) |
+| Default | `triggerDefault` / `claimDefaultCompensation` | `trigger_listing_default` / compensation pool on PDA |
 | Approve | `approveListing` + deploy CapShare | `approve_listing` + SPL mint ref |
 | Collateral | `creditCollateral` | `deposit_collateral` |
 | Notes | `AgentNoteToken` | Phase 2 |

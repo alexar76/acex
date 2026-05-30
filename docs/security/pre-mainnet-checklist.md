@@ -6,7 +6,7 @@
 
 | Component | Path |
 |-----------|------|
-| EVM contracts | `acex/contracts/evm/src/` |
+| EVM contracts | `acex/contracts/evm/src/` (incl. `AgentAuditPool`, `PulseDistributor`) |
 | Solana program | `acex/contracts/solana/programs/acex-capital/` |
 | Hub pricing oracle surface | `GET /api/v2/capital/pricing` |
 | Jupiter integration | `acex/integrations/jupiter.py` |

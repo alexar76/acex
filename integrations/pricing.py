@@ -39,6 +39,7 @@ def build_pricing_snapshot(
     listing_id: str | None = None,
     limit: int = 50,
     ipo_overlay: dict[str, Any] | None = None,
+    audit_overlay: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build Pulse Terminal pricing payload from hub/factory capabilities.
 
@@ -49,6 +50,7 @@ def build_pricing_snapshot(
     """
     limit = min(max(1, limit), 200)
     ipo_overlay = ipo_overlay or {}
+    audit_overlay = audit_overlay or {}
     rows = [_cap_dict(c) for c in capabilities]
 
     if listing_id:
@@ -108,6 +110,21 @@ def build_pricing_snapshot(
         else:
             listing["acex_listed"] = False
 
+        audit = audit_overlay.get(pid)
+        if isinstance(audit, dict) and not audit.get("error"):
+            listing["proof_of_audit"] = {
+                "enabled": audit.get("enabled", False),
+                "aggregate_score_bps": audit.get("aggregate_score_bps", 0),
+                "total_cover_usd": audit.get("total_cover_usd", 0.0),
+                "auditor_count": audit.get("auditor_count", 0),
+                "audit_fee_bps": audit.get("audit_fee_bps", 0),
+                "accrued_audit_rewards_usd": audit.get("accrued_audit_rewards_usd", 0.0),
+                "suggested_note_spread_bps": audit.get("suggested_note_spread_bps"),
+                "default_risk": audit.get("default_risk", "none"),
+                "default": audit.get("default") or {},
+                "coverages": audit.get("coverages") or [],
+            }
+
         listings.append(listing)
         indices.append(
             {
@@ -145,6 +162,19 @@ def build_pricing_snapshot(
         "chain": chain_norm,
         "listing_filter": listing_id,
         "acex_listings_live": sum(1 for x in listings if x.get("acex_listed")),
+        "proof_of_audit": {
+            "protocol_version": "0.1.1",
+            "audit_pool_address": next(
+                (a.get("audit_pool_address") for a in audit_overlay.values() if isinstance(a, dict)),
+                None,
+            ),
+            "listings_with_coverage": sum(
+                1 for x in listings if (x.get("proof_of_audit") or {}).get("enabled")
+            ),
+            "total_cover_usd": round(
+                sum((x.get("proof_of_audit") or {}).get("total_cover_usd", 0.0) for x in listings), 6
+            ),
+        },
         "listings": listings,
         "indices": indices,
         "liquidity": liquidity,
@@ -164,5 +194,11 @@ def build_pricing_snapshot(
             "pricing_stream": "/api/v2/capital/pricing/stream",
             "pricing_ws": "/api/v2/capital/pricing/ws",
             "hub_endpoint": "/ai-market/v2/capital/pricing",
+            "audit_detail_fields": [
+                "coverages",
+                "default_risk",
+                "aggregate_score_bps",
+                "total_cover_usd",
+            ],
         },
     }

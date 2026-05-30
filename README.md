@@ -33,6 +33,7 @@
 | Legacy / draft | Canonical name | Role |
 |----------------|----------------|------|
 | AI-IPO | **ALP** — Agent Listing Protocol | Listing, audit gate, mint agent shares |
+| Proof-of-Audit | **AgentAuditPool** | Staked auditors, slash on default ([spec](protocol/proof-of-audit.md)) |
 | AI-Stocks | **CapShares** | ERC-20 shares tied to an agent listing |
 | AI-Bonds | **AgentNotes** | Fixed-income against escrow collateral |
 | AI-Lending | **LiquidityMesh** | Agent-to-agent USDC liquidity pool |
@@ -134,6 +135,7 @@ See [contracts/README.md](contracts/README.md) and [protocol/spec-capital-market
 | [Testing](docs/testing.md) | Forge + pytest commands |
 | [Security audit 2026](docs/security/audit-2026-05.md) | Threat model + findings |
 | [ALP spec](protocol/spec-capital-markets.md) | Agent Listing Protocol |
+| [Proof-of-Audit](protocol/proof-of-audit.md) | Staked auditor market · baseline · default compensation |
 
 ---
 

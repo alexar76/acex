@@ -9,6 +9,10 @@ use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
 declare_id!("AcexCap1italMark3tL1st1ngReg1stryPDA");
 
 pub const MIN_AUDIT_SCORE_BPS: u16 = 7000;
+pub const MIN_AUDIT_STAKE_USDC: u64 = 10_000_000_000; // 10k USDC (6 decimals)
+pub const MIN_COVER_USDC: u64 = 1_000_000_000; // 1k USDC
+pub const DEFAULT_DROP_BPS: u16 = 5000;
+pub const DEFAULT_AUDIT_FEE_BPS: u16 = 100;
 
 #[program]
 pub mod acex_capital {
@@ -357,6 +361,271 @@ pub mod acex_capital {
         });
         Ok(())
     }
+
+    // ── Proof-of-Audit (Phase 2) ────────────────────────────────
+
+    pub fn initialize_audit_pool(ctx: Context<InitializeAuditPool>, audit_fee_bps: u16) -> Result<()> {
+        require!(!ctx.accounts.config.paused, AcexError::Paused);
+        let pool = &mut ctx.accounts.audit_pool;
+        require!(!pool.initialized, AcexError::AlreadyInitialized);
+        pool.initialized = true;
+        pool.audit_fee_bps = audit_fee_bps;
+        pool.bump = ctx.bumps.audit_pool;
+        Ok(())
+    }
+
+    pub fn stake_audit(ctx: Context<StakeAudit>, amount: u64) -> Result<()> {
+        require!(!ctx.accounts.config.paused, AcexError::Paused);
+        require!(amount > 0, AcexError::ZeroAmount);
+        let pool = &ctx.accounts.audit_pool;
+        require!(pool.initialized, AcexError::AuditPoolNotInitialized);
+
+        token::transfer(
+            CpiContext::new(
+                ctx.accounts.token_program.to_account_info(),
+                Transfer {
+                    from: ctx.accounts.auditor_ata.to_account_info(),
+                    to: ctx.accounts.pool_vault_ata.to_account_info(),
+                    authority: ctx.accounts.auditor.to_account_info(),
+                },
+            ),
+            amount,
+        )?;
+
+        let stake = &mut ctx.accounts.auditor_stake;
+        if stake.auditor == Pubkey::default() {
+            stake.auditor = ctx.accounts.auditor.key();
+            stake.bump = ctx.bumps.auditor_stake;
+        }
+        stake.staked = stake.staked.checked_add(amount).ok_or(AcexError::MathOverflow)?;
+
+        emit!(AuditStaked {
+            auditor: stake.auditor,
+            amount,
+            total_staked: stake.staked,
+        });
+        Ok(())
+    }
+
+    pub fn unstake_audit(ctx: Context<UnstakeAudit>, amount: u64) -> Result<()> {
+        require!(!ctx.accounts.config.paused, AcexError::Paused);
+        require!(amount > 0, AcexError::ZeroAmount);
+        let stake = &mut ctx.accounts.auditor_stake;
+        let free = stake.staked.saturating_sub(stake.locked_stake);
+        require!(amount <= free, AcexError::InsufficientFreeStake);
+        stake.staked = stake.staked.checked_sub(amount).ok_or(AcexError::MathOverflow)?;
+
+        let seeds: &[&[u8]] = &[b"audit_pool_vault", &[ctx.bumps.pool_vault_authority]];
+        token::transfer(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                Transfer {
+                    from: ctx.accounts.pool_vault_ata.to_account_info(),
+                    to: ctx.accounts.auditor_ata.to_account_info(),
+                    authority: ctx.accounts.pool_vault_authority.to_account_info(),
+                },
+                &[seeds],
+            ),
+            amount,
+        )?;
+        emit!(AuditUnstaked {
+            auditor: stake.auditor,
+            amount,
+            total_staked: stake.staked,
+        });
+        Ok(())
+    }
+
+    pub fn cover_listing(
+        ctx: Context<CoverListing>,
+        listing_id: [u8; 32],
+        cover_amount: u64,
+        score_bps: u16,
+    ) -> Result<()> {
+        require!(!ctx.accounts.config.paused, AcexError::Paused);
+        require!(cover_amount >= MIN_COVER_USDC, AcexError::CoverTooLow);
+        require!(score_bps >= MIN_AUDIT_SCORE_BPS, AcexError::AuditScoreTooLow);
+
+        let listing = &ctx.accounts.listing;
+        require!(listing.status == ListingStatus::Approved as u8, AcexError::InvalidStatus);
+
+        let stake = &mut ctx.accounts.auditor_stake;
+        let free = stake.staked.saturating_sub(stake.locked_stake);
+        require!(cover_amount <= free, AcexError::InsufficientFreeStake);
+        require!(stake.staked >= MIN_AUDIT_STAKE_USDC, AcexError::InsufficientStake);
+
+        stake.locked_stake = stake
+            .locked_stake
+            .checked_add(cover_amount)
+            .ok_or(AcexError::MathOverflow)?;
+
+        let coverage = &mut ctx.accounts.coverage;
+        if coverage.listing_id == [0u8; 32] {
+            coverage.listing_id = listing_id;
+            coverage.auditor = ctx.accounts.auditor.key();
+            coverage.bump = ctx.bumps.coverage;
+        }
+        coverage.cover_amount = cover_amount;
+        coverage.score_bps = score_bps;
+        coverage.phase = CoveragePhase::Insuring as u8;
+
+        let audit_state = &mut ctx.accounts.listing_audit;
+        if audit_state.listing_id == [0u8; 32] {
+            audit_state.listing_id = listing_id;
+            audit_state.approved_at = listing.listed_at;
+            audit_state.bump = ctx.bumps.listing_audit;
+        }
+        audit_state.total_cover = audit_state
+            .total_cover
+            .checked_add(cover_amount)
+            .ok_or(AcexError::MathOverflow)?;
+        audit_state.aggregate_score_bps = score_bps;
+
+        emit!(ListingCovered {
+            listing_id,
+            auditor: ctx.accounts.auditor.key(),
+            cover_amount,
+            score_bps,
+        });
+        Ok(())
+    }
+
+    pub fn fund_audit_rewards(
+        ctx: Context<FundAuditRewards>,
+        listing_id: [u8; 32],
+        gross_amount: u64,
+    ) -> Result<()> {
+        require!(!ctx.accounts.config.paused, AcexError::Paused);
+        require!(gross_amount > 0, AcexError::ZeroAmount);
+        let pool = &ctx.accounts.audit_pool;
+        let fee = (gross_amount as u128)
+            .checked_mul(pool.audit_fee_bps as u128)
+            .ok_or(AcexError::MathOverflow)?
+            .checked_div(10_000)
+            .ok_or(AcexError::MathOverflow)? as u64;
+        require!(fee > 0, AcexError::ZeroAmount);
+
+        token::transfer(
+            CpiContext::new(
+                ctx.accounts.token_program.to_account_info(),
+                Transfer {
+                    from: ctx.accounts.funder_ata.to_account_info(),
+                    to: ctx.accounts.pool_vault_ata.to_account_info(),
+                    authority: ctx.accounts.funder.to_account_info(),
+                },
+            ),
+            fee,
+        )?;
+
+        let audit_state = &ctx.accounts.listing_audit;
+        require!(!audit_state.defaulted, AcexError::AlreadyDefaulted);
+        require!(audit_state.total_cover > 0, AcexError::CoverageNotFound);
+
+        let coverage = &mut ctx.accounts.coverage;
+        require!(coverage.phase == CoveragePhase::Insuring as u8, AcexError::InvalidCoveragePhase);
+        coverage.pending_rewards = coverage
+            .pending_rewards
+            .checked_add(fee)
+            .ok_or(AcexError::MathOverflow)?;
+
+        emit!(AuditRewardsFunded {
+            listing_id,
+            gross_amount,
+            fee_amount: fee,
+            funder: ctx.accounts.funder.key(),
+        });
+        Ok(())
+    }
+
+    pub fn claim_audit_reward(ctx: Context<ClaimAuditReward>, listing_id: [u8; 32]) -> Result<()> {
+        require!(!ctx.accounts.config.paused, AcexError::Paused);
+        let coverage = &mut ctx.accounts.coverage;
+        let pending = coverage.pending_rewards;
+        require!(pending > 0, AcexError::NothingToClaim);
+        coverage.pending_rewards = 0;
+        coverage.claimed_rewards = coverage
+            .claimed_rewards
+            .checked_add(pending)
+            .ok_or(AcexError::MathOverflow)?;
+
+        let seeds: &[&[u8]] = &[b"audit_pool_vault", &[ctx.bumps.pool_vault_authority]];
+        token::transfer(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                Transfer {
+                    from: ctx.accounts.pool_vault_ata.to_account_info(),
+                    to: ctx.accounts.auditor_ata.to_account_info(),
+                    authority: ctx.accounts.pool_vault_authority.to_account_info(),
+                },
+                &[seeds],
+            ),
+            pending,
+        )?;
+        emit!(AuditRewardClaimed {
+            listing_id,
+            auditor: ctx.accounts.auditor.key(),
+            amount: pending,
+        });
+        Ok(())
+    }
+
+    pub fn observe_listing_price(
+        ctx: Context<ObserveListingPrice>,
+        listing_id: [u8; 32],
+        baseline_price_e6: u64,
+        twap_price_e6: u64,
+    ) -> Result<()> {
+        require!(!ctx.accounts.config.paused, AcexError::Paused);
+        let audit_state = &mut ctx.accounts.listing_audit;
+        if audit_state.listing_id == [0u8; 32] {
+            audit_state.listing_id = listing_id;
+            audit_state.bump = ctx.bumps.listing_audit;
+        }
+        if audit_state.baseline_price_e6 == 0 {
+            audit_state.baseline_price_e6 = baseline_price_e6;
+        }
+        audit_state.twap_price_e6 = twap_price_e6;
+        emit!(ListingPriceObserved {
+            listing_id,
+            baseline_price_e6: audit_state.baseline_price_e6,
+            twap_price_e6,
+        });
+        Ok(())
+    }
+
+    pub fn trigger_listing_default(ctx: Context<TriggerListingDefault>, listing_id: [u8; 32]) -> Result<()> {
+        require!(!ctx.accounts.config.paused, AcexError::Paused);
+        let audit_state = &mut ctx.accounts.listing_audit;
+        require!(!audit_state.defaulted, AcexError::AlreadyDefaulted);
+        require!(audit_state.baseline_price_e6 > 0, AcexError::BaselineNotSet);
+        require!(audit_state.twap_price_e6 > 0, AcexError::DefaultConditionsNotMet);
+
+        let drawdown_bps = ((audit_state.baseline_price_e6 as u128)
+            .saturating_sub(audit_state.twap_price_e6 as u128)
+            .checked_mul(10_000)
+            .ok_or(AcexError::MathOverflow)?
+            .checked_div(audit_state.baseline_price_e6 as u128)
+            .ok_or(AcexError::MathOverflow)?) as u16;
+        require!(drawdown_bps >= DEFAULT_DROP_BPS, AcexError::DefaultConditionsNotMet);
+
+        audit_state.defaulted = true;
+        let coverage = &mut ctx.accounts.coverage;
+        if coverage.phase == CoveragePhase::Insuring as u8 {
+            coverage.phase = CoveragePhase::Slashed as u8;
+            let stake = &mut ctx.accounts.auditor_stake;
+            stake.locked_stake = stake.locked_stake.saturating_sub(coverage.cover_amount);
+            audit_state.compensation_pool = audit_state
+                .compensation_pool
+                .checked_add(coverage.cover_amount)
+                .ok_or(AcexError::MathOverflow)?;
+        }
+
+        emit!(ListingDefaultTriggered {
+            listing_id,
+            drawdown_bps,
+        });
+        Ok(())
+    }
 }
 
 // ── Accounts ─────────────────────────────────────────────────────
@@ -414,6 +683,64 @@ pub struct CapsensePosition {
     pub premium_paid: u64,
     pub exercised: bool,
     pub bump: u8,
+}
+
+#[account]
+pub struct AuditPoolConfig {
+    pub initialized: bool,
+    pub audit_fee_bps: u16,
+    pub bump: u8,
+}
+
+#[account]
+pub struct AuditorStakeAccount {
+    pub auditor: Pubkey,
+    pub staked: u64,
+    pub locked_stake: u64,
+    pub bump: u8,
+}
+
+#[account]
+pub struct ListingAuditState {
+    pub listing_id: [u8; 32],
+    pub aggregate_score_bps: u16,
+    pub total_cover: u64,
+    pub defaulted: bool,
+    pub approved_at: i64,
+    pub baseline_price_e6: u64,
+    pub twap_price_e6: u64,
+    pub compensation_pool: u64,
+    pub bump: u8,
+}
+
+impl ListingAuditState {
+    pub fn recompute_aggregate_score(&mut self) {
+        // Single-coverage listings use score directly; multi-auditor aggregation
+        // is done off-chain for Pulse Terminal and mirrored on fund/claim paths.
+        if self.total_cover > 0 && self.aggregate_score_bps == 0 {
+            self.aggregate_score_bps = MIN_AUDIT_SCORE_BPS;
+        }
+    }
+}
+
+#[account]
+pub struct CoverageRecord {
+    pub listing_id: [u8; 32],
+    pub auditor: Pubkey,
+    pub cover_amount: u64,
+    pub score_bps: u16,
+    pub phase: u8,
+    pub pending_rewards: u64,
+    pub claimed_rewards: u64,
+    pub bump: u8,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq)]
+pub enum CoveragePhase {
+    Open = 0,
+    Insuring = 1,
+    Slashed = 2,
+    Released = 3,
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq)]
@@ -710,6 +1037,226 @@ pub struct ReleaseCollateral<'info> {
     pub token_program: Program<'info, Token>,
 }
 
+// ── Proof-of-Audit contexts ──────────────────────────────────────
+
+#[derive(Accounts)]
+pub struct InitializeAuditPool<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+    #[account(seeds = [b"config"], bump, has_one = admin @ AcexError::Unauthorized)]
+    pub config: Account<'info, ProgramConfig>,
+    #[account(
+        init,
+        payer = admin,
+        space = 8 + 1 + 2 + 1,
+        seeds = [b"audit_pool"],
+        bump
+    )]
+    pub audit_pool: Account<'info, AuditPoolConfig>,
+    /// CHECK: vault authority
+    #[account(seeds = [b"audit_pool_vault"], bump)]
+    pub pool_vault_authority: UncheckedAccount<'info>,
+    #[account(
+        init,
+        payer = admin,
+        token::mint = usdc_mint,
+        token::authority = pool_vault_authority,
+        seeds = [b"audit_pool_vault_ata"],
+        bump,
+    )]
+    pub pool_vault_ata: Account<'info, TokenAccount>,
+    pub usdc_mint: Account<'info, Mint>,
+    pub token_program: Program<'info, Token>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct StakeAudit<'info> {
+    #[account(mut)]
+    pub auditor: Signer<'info>,
+    #[account(seeds = [b"config"], bump)]
+    pub config: Account<'info, ProgramConfig>,
+    #[account(seeds = [b"audit_pool"], bump = audit_pool.bump)]
+    pub audit_pool: Account<'info, AuditPoolConfig>,
+    #[account(
+        init_if_needed,
+        payer = auditor,
+        space = 8 + 32 + 8 + 8 + 1,
+        seeds = [b"auditor_stake", auditor.key().as_ref()],
+        bump
+    )]
+    pub auditor_stake: Account<'info, AuditorStakeAccount>,
+    /// CHECK: vault authority
+    #[account(seeds = [b"audit_pool_vault"], bump)]
+    pub pool_vault_authority: UncheckedAccount<'info>,
+    #[account(
+        mut,
+        seeds = [b"audit_pool_vault_ata"],
+        bump,
+    )]
+    pub pool_vault_ata: Account<'info, TokenAccount>,
+    #[account(mut)]
+    pub auditor_ata: Account<'info, TokenAccount>,
+    pub token_program: Program<'info, Token>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct UnstakeAudit<'info> {
+    #[account(mut)]
+    pub auditor: Signer<'info>,
+    #[account(seeds = [b"config"], bump)]
+    pub config: Account<'info, ProgramConfig>,
+    #[account(
+        mut,
+        seeds = [b"auditor_stake", auditor.key().as_ref()],
+        bump = auditor_stake.bump,
+        has_one = auditor @ AcexError::Unauthorized
+    )]
+    pub auditor_stake: Account<'info, AuditorStakeAccount>,
+    /// CHECK: vault authority
+    #[account(seeds = [b"audit_pool_vault"], bump)]
+    pub pool_vault_authority: UncheckedAccount<'info>,
+    #[account(mut, seeds = [b"audit_pool_vault_ata"], bump)]
+    pub pool_vault_ata: Account<'info, TokenAccount>,
+    #[account(mut)]
+    pub auditor_ata: Account<'info, TokenAccount>,
+    pub token_program: Program<'info, Token>,
+}
+
+#[derive(Accounts)]
+#[instruction(listing_id: [u8; 32])]
+pub struct CoverListing<'info> {
+    #[account(mut)]
+    pub auditor: Signer<'info>,
+    #[account(seeds = [b"config"], bump)]
+    pub config: Account<'info, ProgramConfig>,
+    #[account(seeds = [b"listing", listing_id.as_ref()], bump = listing.bump)]
+    pub listing: Account<'info, Listing>,
+    #[account(
+        mut,
+        seeds = [b"auditor_stake", auditor.key().as_ref()],
+        bump = auditor_stake.bump,
+        has_one = auditor @ AcexError::Unauthorized
+    )]
+    pub auditor_stake: Account<'info, AuditorStakeAccount>,
+    #[account(
+        init_if_needed,
+        payer = auditor,
+        space = 8 + 32 + 32 + 8 + 2 + 1 + 8 + 8 + 1,
+        seeds = [b"coverage", listing_id.as_ref(), auditor.key().as_ref()],
+        bump
+    )]
+    pub coverage: Account<'info, CoverageRecord>,
+    #[account(
+        init_if_needed,
+        payer = auditor,
+        space = 8 + 32 + 2 + 8 + 1 + 8 + 8 + 8 + 1,
+        seeds = [b"listing_audit", listing_id.as_ref()],
+        bump
+    )]
+    pub listing_audit: Account<'info, ListingAuditState>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+#[instruction(listing_id: [u8; 32])]
+pub struct FundAuditRewards<'info> {
+    #[account(mut)]
+    pub funder: Signer<'info>,
+    #[account(seeds = [b"config"], bump)]
+    pub config: Account<'info, ProgramConfig>,
+    #[account(seeds = [b"audit_pool"], bump = audit_pool.bump)]
+    pub audit_pool: Account<'info, AuditPoolConfig>,
+    #[account(
+        mut,
+        seeds = [b"listing_audit", listing_id.as_ref()],
+        bump = listing_audit.bump
+    )]
+    pub listing_audit: Account<'info, ListingAuditState>,
+    #[account(
+        mut,
+        seeds = [b"coverage", listing_id.as_ref(), coverage.auditor.as_ref()],
+        bump = coverage.bump
+    )]
+    pub coverage: Account<'info, CoverageRecord>,
+    /// CHECK: vault authority
+    #[account(seeds = [b"audit_pool_vault"], bump)]
+    pub pool_vault_authority: UncheckedAccount<'info>,
+    #[account(mut, seeds = [b"audit_pool_vault_ata"], bump)]
+    pub pool_vault_ata: Account<'info, TokenAccount>,
+    #[account(mut)]
+    pub funder_ata: Account<'info, TokenAccount>,
+    pub token_program: Program<'info, Token>,
+}
+
+#[derive(Accounts)]
+#[instruction(listing_id: [u8; 32])]
+pub struct ClaimAuditReward<'info> {
+    #[account(mut)]
+    pub auditor: Signer<'info>,
+    #[account(seeds = [b"config"], bump)]
+    pub config: Account<'info, ProgramConfig>,
+    #[account(
+        mut,
+        seeds = [b"coverage", listing_id.as_ref(), auditor.key().as_ref()],
+        bump = coverage.bump,
+        has_one = auditor @ AcexError::Unauthorized
+    )]
+    pub coverage: Account<'info, CoverageRecord>,
+    /// CHECK: vault authority
+    #[account(seeds = [b"audit_pool_vault"], bump)]
+    pub pool_vault_authority: UncheckedAccount<'info>,
+    #[account(mut, seeds = [b"audit_pool_vault_ata"], bump)]
+    pub pool_vault_ata: Account<'info, TokenAccount>,
+    #[account(mut)]
+    pub auditor_ata: Account<'info, TokenAccount>,
+    pub token_program: Program<'info, Token>,
+}
+
+#[derive(Accounts)]
+#[instruction(listing_id: [u8; 32])]
+pub struct ObserveListingPrice<'info> {
+    pub observer: Signer<'info>,
+    #[account(seeds = [b"config"], bump)]
+    pub config: Account<'info, ProgramConfig>,
+    #[account(
+        init_if_needed,
+        payer = observer,
+        space = 8 + 32 + 2 + 8 + 1 + 8 + 8 + 8 + 1,
+        seeds = [b"listing_audit", listing_id.as_ref()],
+        bump
+    )]
+    pub listing_audit: Account<'info, ListingAuditState>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+#[instruction(listing_id: [u8; 32])]
+pub struct TriggerListingDefault<'info> {
+    pub caller: Signer<'info>,
+    #[account(seeds = [b"config"], bump)]
+    pub config: Account<'info, ProgramConfig>,
+    #[account(
+        mut,
+        seeds = [b"listing_audit", listing_id.as_ref()],
+        bump = listing_audit.bump
+    )]
+    pub listing_audit: Account<'info, ListingAuditState>,
+    #[account(
+        mut,
+        seeds = [b"coverage", listing_id.as_ref(), coverage.auditor.as_ref()],
+        bump = coverage.bump
+    )]
+    pub coverage: Account<'info, CoverageRecord>,
+    #[account(
+        mut,
+        seeds = [b"auditor_stake", coverage.auditor.as_ref()],
+        bump = auditor_stake.bump
+    )]
+    pub auditor_stake: Account<'info, AuditorStakeAccount>,
+}
+
 // ── Events / Errors ──────────────────────────────────────────────
 
 #[event]
@@ -782,6 +1329,56 @@ pub struct CapsenseOptionExercised {
     pub index_level_bps: u64,
 }
 
+#[event]
+pub struct AuditStaked {
+    pub auditor: Pubkey,
+    pub amount: u64,
+    pub total_staked: u64,
+}
+
+#[event]
+pub struct AuditUnstaked {
+    pub auditor: Pubkey,
+    pub amount: u64,
+    pub total_staked: u64,
+}
+
+#[event]
+pub struct ListingCovered {
+    pub listing_id: [u8; 32],
+    pub auditor: Pubkey,
+    pub cover_amount: u64,
+    pub score_bps: u16,
+}
+
+#[event]
+pub struct AuditRewardsFunded {
+    pub listing_id: [u8; 32],
+    pub gross_amount: u64,
+    pub fee_amount: u64,
+    pub funder: Pubkey,
+}
+
+#[event]
+pub struct AuditRewardClaimed {
+    pub listing_id: [u8; 32],
+    pub auditor: Pubkey,
+    pub amount: u64,
+}
+
+#[event]
+pub struct ListingPriceObserved {
+    pub listing_id: [u8; 32],
+    pub baseline_price_e6: u64,
+    pub twap_price_e6: u64,
+}
+
+#[event]
+pub struct ListingDefaultTriggered {
+    pub listing_id: [u8; 32],
+    pub drawdown_bps: u16,
+}
+
 #[error_code]
 pub enum AcexError {
     #[msg("Unauthorized")]
@@ -810,4 +1407,24 @@ pub enum AcexError {
     OptionOutOfMoney,
     #[msg("Option already exercised")]
     OptionAlreadyExercised,
+    #[msg("Audit pool not initialized")]
+    AuditPoolNotInitialized,
+    #[msg("Insufficient stake")]
+    InsufficientStake,
+    #[msg("Insufficient free stake")]
+    InsufficientFreeStake,
+    #[msg("Cover too low")]
+    CoverTooLow,
+    #[msg("Coverage not found")]
+    CoverageNotFound,
+    #[msg("Invalid coverage phase")]
+    InvalidCoveragePhase,
+    #[msg("Nothing to claim")]
+    NothingToClaim,
+    #[msg("Already defaulted")]
+    AlreadyDefaulted,
+    #[msg("Baseline not set")]
+    BaselineNotSet,
+    #[msg("Default conditions not met")]
+    DefaultConditionsNotMet,
 }

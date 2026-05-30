@@ -7,11 +7,15 @@ Capital markets contracts for Base / Ethereum (USDC collateral).
 | Contract | Purpose |
 |----------|---------|
 | `AgentListingRegistry` | ALP — listing applications, audit, CapShare deployment |
+| `AgentAuditPool` | Proof-of-Audit — staked auditors, TWAP default, note compensation |
 | `AgentShareToken` | ERC-20 CapShares per listing |
-| `AgentNoteToken` | ERC-20 AgentNotes (bonds) with maturity |
+| `AgentNoteToken` | ERC-20 AgentNotes (bonds) with maturity + default freeze |
 | `AgentCollateralVault` | Escrow collateral for notes + lending |
 | `AgentLendingPool` | LiquidityMesh — deposit / borrow USDC |
 | `PulseAMM` | Constant-product AMM for CapShare/USDC |
+| `PulseDistributor` | Merkle revenue epochs for CapShare holders |
+
+See [../../protocol/proof-of-audit.md](../../protocol/proof-of-audit.md) for audit pool API.
 
 ## Setup
 

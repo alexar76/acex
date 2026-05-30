@@ -10,7 +10,7 @@
 ## EVM stack
 
 - `AgentListingRegistry` — ALP  
-- `AgentAuditPool` — Proof-of-Audit (staked auditors, slash on default)  
+- `AgentAuditPool` — Proof-of-Audit (staked auditors, slash on default) — [spec](../protocol/proof-of-audit.md)  
 - `AgentCollateralVault` — collateral  
 - `AgentShareToken` / `AgentNoteToken` — CapShares & AgentNotes  
 - `AgentLendingPool` — LiquidityMesh  
@@ -18,7 +18,7 @@
 
 ## Solana stack
 
-- `acex_capital` — ALP + collateral vault (SPL USDC)
+- `acex_capital` — ALP + collateral vault (SPL USDC) + **Proof-of-Audit** (`stake_audit`, `cover_listing`, `fund_audit_rewards`, `claim_audit_reward`, `trigger_listing_default`) — [spec](../protocol/proof-of-audit.md)
 
 ## Security
 

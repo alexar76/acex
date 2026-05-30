@@ -14,9 +14,11 @@ Agent → apply(listing_id, metadata_hash)
 Auditor(s) → AgentAuditPool.coverListing(cover_usdc, score_bps)   [Proof-of-Audit]
            OR legacy allowlisted auditor → record_audit(score_bps)
 Admin → approve(name, symbol, max_supply) → CapShare ERC-20 / SPL mint
+Agent/MM → create PulseAMM pool + captureBaseline (≤30d after approve)
 Optional → issue_agent_notes(collateral_usdc, maturity, face_value)
+  → AgentNoteToken.setAuditPool wired by registry
 Revenue → fundAuditRewards → auditors claimAuditReward
-Default → triggerDefault (TWAP −50%) → note holders claimDefaultCompensation
+Default → triggerDefault (TWAP −50%, baseline required) → note holders claimDefaultCompensation
 ```
 
 | Field | Rule |

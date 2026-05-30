@@ -8,7 +8,14 @@ forge install foundry-rs/forge-std OpenZeppelin/openzeppelin-contracts --no-git
 forge test -vv
 ```
 
-**Coverage:** ALP listing, audit/reject/pause, CapShares lock, AgentNotes redeem, LiquidityMesh borrow/repay, Pulse AMM swaps.
+**Coverage:** ALP listing, audit/reject/pause, CapShares lock, AgentNotes redeem, LiquidityMesh borrow/repay, Pulse AMM swaps, **AgentAuditPool** (stake, cover, rewards, default slash).
+
+Hub Proof-of-Audit ledger:
+
+```bash
+cd aimarket-hub
+pytest tests/test_acex_audit.py tests/test_acex_ipo_api.py -q
+```
 
 ## Python (monorepo root)
 

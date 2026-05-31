@@ -25,8 +25,29 @@ pytest tests/test_acex_docs.py tests/test_desktop_sku_manifest.py tests/test_kil
 
 ## Solana
 
+### Prerequisites (ACEX `acex_capital`)
+
+| Tool | Minimum | Why |
+|------|---------|-----|
+| Rust (host) | **1.85+** | crates.io `edition2024` manifests |
+| Solana CLI | **stable (Agave 2.x+)** | `cargo-build-sbf`, platform-tools |
+| Anchor CLI | **0.30.1** (optional) | IDL + `anchor test` |
+
+See [../contracts/solana/README.md](../contracts/solana/README.md) for install commands and lockfile notes.
+
+```bash
+cd acex/contracts/solana
+source "$HOME/.cargo/env"   # rustup 1.85+
+export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
+cargo build-sbf --manifest-path programs/acex-capital/Cargo.toml --locked
+```
+
+### Escrow program (monorepo root)
+
 ```bash
 cd contracts/solana
 anchor build
 # anchor test when local validator available
 ```
+
+ACEX `acex_capital` CI: job **`acex-solana-build`** in `.github/workflows/contracts-ci.yml`.

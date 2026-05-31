@@ -73,7 +73,7 @@ rm -f "$TMP_KEYFILE"
 
 if [[ $EXIT -eq 0 ]]; then
   echo "=== ACEX Capital deployed ==="
-  echo "Program ID: AcexCap1italMark3tL1st1ngReg1stryPDA"
+  echo "Program ID: 9BkXiRFMB5bAMMqAXxTzaLPYspiGxoUTEeX8kih9ne73"
   echo "Next: anchor run initialize (or hub admin tx)"
 else
   echo "=== Deploy failed ($EXIT) ==="

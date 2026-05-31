@@ -1,0 +1,7 @@
+# Host-side `cargo check` / Anchor CLI. Solana `cargo build-sbf` uses platform-tools,
+# but dependency resolution still reads crate manifests — lock blake3 ≤1.5 in Cargo.lock
+# so cpufeatures 0.3 (edition2024) is never fetched on Rust 1.75 toolchains.
+[toolchain]
+channel = "1.85.0"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

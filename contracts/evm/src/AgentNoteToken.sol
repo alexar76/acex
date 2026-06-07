@@ -78,6 +78,7 @@ contract AgentNoteToken is ERC20, Ownable2Step {
 
     /// @notice Burn notes from a holder during default compensation (not locked in pool).
     function burnForDefault(address holder, uint256 amount) external onlyAuditPool {
+        if (!defaultFrozen) revert TransfersFrozen();
         _burn(holder, amount);
     }
 

@@ -37,6 +37,7 @@ jobs:
           pct="${pct:-0}"
           python3 "$GITHUB_WORKSPACE/scripts/generate_static_badge.py" coverage "${pct}%" "$GITHUB_WORKSPACE/docs/badges/coverage.svg"
           if [[ "${GITHUB_REF}" == "refs/heads/main" && "${GITHUB_EVENT_NAME}" == "push" ]]; then
+            cd "$GITHUB_WORKSPACE"
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git add docs/badges/coverage.svg

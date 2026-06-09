@@ -50,6 +50,10 @@ First admin password: interactive TTY (`docker compose run --rm -it app`) or one
 
 ## Local checks
 
+> **Read [`docs/testing-rules.md`](docs/testing-rules.md) first** — codebase-specific testing rules
+> (SQLite field-persistence trap, end-to-end loop tracing, the ruff gate, cold-start tests). Each
+> comes from a bug that passed unit tests and still broke production.
+
 Run what your change touches; CI will run the rest on `main` / PRs.
 
 | Check | Command |

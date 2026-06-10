@@ -19,6 +19,8 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
 
       - name: Install Foundry libraries
         working-directory: contracts/evm

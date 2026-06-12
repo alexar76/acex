@@ -32,9 +32,11 @@ contract AgentAuditPool is IAgentAuditPool, ReentrancyGuard, Ownable2Step, Pausa
     error DefaultNotTriggered();
     error DefaultConditionsNotMet();
     error BaselineNotSet();
+    error BaselineAlreadySet();
     error NoCompensation();
     error NothingToClaim();
     error ExceedsClaimableNotes();
+    error TooManyCoverages();
 
     uint256 public constant BPS = 10_000;
     uint256 public constant MIN_STAKE_USDC = 10_000e6;
@@ -45,6 +47,9 @@ contract AgentAuditPool is IAgentAuditPool, ReentrancyGuard, Ownable2Step, Pausa
     /// @dev Longer than {DEFAULT_WINDOW} so agents can seed PulseAMM liquidity first.
     uint256 public constant BASELINE_CAPTURE_WINDOW = 30 days;
     uint256 public constant MAX_NOTE_SPREAD_BPS = 2_000; // 20% APR cap from score curve
+    /// @dev Hard cap on coverages per listing so {_recomputeAggregateScore} and the
+    ///      default/release loops stay bounded and cannot be griefed into a gas-DoS.
+    uint256 public constant MAX_COVERAGES_PER_LISTING = 256;
 
     IERC20 public immutable usdc;
     IAgentListingRegistry public immutable registry;
@@ -140,6 +145,8 @@ contract AgentAuditPool is IAgentAuditPool, ReentrancyGuard, Ownable2Step, Pausa
             revert InvalidListing();
         }
 
+        if (_coverages[listingId].length >= MAX_COVERAGES_PER_LISTING) revert TooManyCoverages();
+
         lockedStake[msg.sender] += coverAmount;
         _coverages[listingId].push(
             Coverage({
@@ -219,7 +226,7 @@ contract AgentAuditPool is IAgentAuditPool, ReentrancyGuard, Ownable2Step, Pausa
     function captureBaseline(bytes32 listingId) external whenNotPaused {
         IAgentListingRegistry.Listing memory L = registry.getListing(listingId);
         if (L.status != IAgentListingRegistry.ListingStatus.Approved) revert InvalidListing();
-        if (baselinePriceE18[listingId] != 0) revert();
+        if (baselinePriceE18[listingId] != 0) revert BaselineAlreadySet();
         if (block.timestamp > approvedAt[listingId] + BASELINE_CAPTURE_WINDOW) {
             revert DefaultConditionsNotMet();
         }

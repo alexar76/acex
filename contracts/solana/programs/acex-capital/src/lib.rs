@@ -162,7 +162,10 @@ pub mod acex_capital {
         require!(!ctx.accounts.config.paused, AcexError::Paused);
         let collateral = &mut ctx.accounts.collateral;
         require!(collateral.usdc_balance >= amount, AcexError::InsufficientCollateral);
-        collateral.usdc_balance -= amount;
+        collateral.usdc_balance = collateral
+            .usdc_balance
+            .checked_sub(amount)
+            .ok_or(AcexError::MathOverflow)?;
         collateral.locked_for_notes = collateral
             .locked_for_notes
             .checked_add(amount)
@@ -180,7 +183,10 @@ pub mod acex_capital {
         require!(!ctx.accounts.config.paused, AcexError::Paused);
         let collateral = &mut ctx.accounts.collateral;
         require!(collateral.locked_for_notes >= amount, AcexError::InsufficientCollateral);
-        collateral.locked_for_notes -= amount;
+        collateral.locked_for_notes = collateral
+            .locked_for_notes
+            .checked_sub(amount)
+            .ok_or(AcexError::MathOverflow)?;
 
         let seeds: &[&[u8]] = &[b"vault", listing_id.as_ref(), &[ctx.bumps.vault_authority]];
         token::transfer(

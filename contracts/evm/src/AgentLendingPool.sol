@@ -23,6 +23,7 @@ contract AgentLendingPool is ReentrancyGuard, Ownable, Pausable {
     using SafeERC20 for IERC20;
 
     // ───────────────────────── errors ─────────────────────────
+    error ZeroAddress();
     error Unauthorized();
     error InsufficientLiquidity();
     error InsufficientCollateral();
@@ -89,7 +90,7 @@ contract AgentLendingPool is ReentrancyGuard, Ownable, Pausable {
 
     constructor(address usdc_, address vault_, address registry_) Ownable(msg.sender) {
         if (usdc_ == address(0) || vault_ == address(0) || registry_ == address(0)) {
-            revert InvalidListing();
+            revert ZeroAddress();
         }
         usdc = IERC20(usdc_);
         vault = AgentCollateralVault(vault_);

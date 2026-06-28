@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  forge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Install Foundry libraries
+        working-directory: contracts/evm
+        run: |
+          forge install foundry-rs/forge-std OpenZeppelin/openzeppelin-contracts --no-git
+
+      - name: Forge test
+        working-directory: contracts/evm
+        run: forge test -vv
+
+      - name: Forge coverage badge
+        run: |
+          cd contracts/evm
+          forge coverage --report summary | tee /tmp/forge-cov.txt
+          pct="$(awk -F'|' '/\| Total/ {gsub(/[^0-9.]/,"",$4); print int($4+0)}' /tmp/forge-cov.txt | head -1)"
+          pct="${pct:-0}"
+          python3 "$GITHUB_WORKSPACE/scripts/generate_static_badge.py" coverage "${pct}%" "$GITHUB_WORKSPACE/docs/badges/coverage.svg"

@@ -32,7 +32,7 @@ if [[ -z "${USDC_ADDRESS:-}" || -z "${DEPLOYER_PRIVATE_KEY:-}" ]]; then
 fi
 
 if [[ ! -d lib/forge-std ]]; then
-  forge install foundry-rs/forge-std OpenZeppelin/openzeppelin-contracts --no-commit
+  forge install foundry-rs/forge-std@v1.9.4 OpenZeppelin/openzeppelin-contracts@v5.6.1 --no-commit
 fi
 
 forge build

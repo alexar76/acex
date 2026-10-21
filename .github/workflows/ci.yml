@@ -23,7 +23,7 @@ jobs:
       - name: Install Foundry libraries
         working-directory: contracts/evm
         run: |
-          forge install foundry-rs/forge-std OpenZeppelin/openzeppelin-contracts --no-git
+          forge install foundry-rs/forge-std@v1.9.4 OpenZeppelin/openzeppelin-contracts@v5.6.1 --no-git
 
       - name: Forge test
         working-directory: contracts/evm

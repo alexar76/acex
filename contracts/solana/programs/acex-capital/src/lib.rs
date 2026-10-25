@@ -19,6 +19,7 @@ pub mod acex_capital {
     use super::*;
 
     pub fn initialize(ctx: Context<Initialize>) -> Result<()> {
+        validate_bootstrap_authority(&ctx.accounts.program_data, ctx.accounts.admin.key())?;
         let cfg = &mut ctx.accounts.config;
         require!(!cfg.initialized, AcexError::AlreadyInitialized);
         cfg.admin = ctx.accounts.admin.key();
@@ -125,7 +126,7 @@ pub mod acex_capital {
 
         token::transfer(
             CpiContext::new(
-                ctx.accounts.token_program.to_account_info(),
+                Token::id(),
                 Transfer {
                     from: ctx.accounts.depositor_ata.to_account_info(),
                     to: ctx.accounts.vault_ata.to_account_info(),
@@ -191,7 +192,7 @@ pub mod acex_capital {
         let seeds: &[&[u8]] = &[b"vault", listing_id.as_ref(), &[ctx.bumps.vault_authority]];
         token::transfer(
             CpiContext::new_with_signer(
-                ctx.accounts.token_program.to_account_info(),
+                Token::id(),
                 Transfer {
                     from: ctx.accounts.vault_ata.to_account_info(),
                     to: ctx.accounts.recipient_ata.to_account_info(),
@@ -253,10 +254,17 @@ pub mod acex_capital {
         require!(!ctx.accounts.config.paused, AcexError::Paused);
         require!(contracts > 0, AcexError::ZeroAmount);
         require!(premium_per_contract > 0, AcexError::ZeroAmount);
+        // The premium is an off-chain quote: the configured authority must attest it.
+        require_quote_authority(
+            &ctx.accounts.config,
+            &ctx.accounts.buyer,
+            ctx.remaining_accounts,
+        )?;
 
         let series = &mut ctx.accounts.series;
         require!(!series.settled, AcexError::OptionSettled);
         require!(Clock::get()?.unix_timestamp < series.expiry_ts, AcexError::OptionExpired);
+        require!(!ctx.accounts.position.exercised, AcexError::OptionAlreadyExercised);
 
         let total_premium = premium_per_contract
             .checked_mul(contracts)
@@ -264,7 +272,7 @@ pub mod acex_capital {
 
         token::transfer(
             CpiContext::new(
-                ctx.accounts.token_program.to_account_info(),
+                Token::id(),
                 Transfer {
                     from: ctx.accounts.buyer_ata.to_account_info(),
                     to: ctx.accounts.series_vault_ata.to_account_info(),
@@ -317,6 +325,11 @@ pub mod acex_capital {
         index_level_bps: u64,
     ) -> Result<()> {
         require!(!ctx.accounts.config.paused, AcexError::Paused);
+        require_quote_authority(
+            &ctx.accounts.config,
+            &ctx.accounts.buyer,
+            ctx.remaining_accounts,
+        )?;
         let series = &ctx.accounts.series;
         require!(!series.settled, AcexError::OptionSettled);
         let now = Clock::get()?.unix_timestamp;
@@ -330,11 +343,12 @@ pub mod acex_capital {
         let intrinsic_bps = index_level_bps
             .checked_sub(series.strike_index_bps)
             .ok_or(AcexError::MathOverflow)?;
-        let payout = (intrinsic_bps as u128)
+        let payout_u128 = (intrinsic_bps as u128)
             .checked_mul(position.contracts as u128)
             .ok_or(AcexError::MathOverflow)?
             .checked_div(10_000)
-            .ok_or(AcexError::MathOverflow)? as u64;
+            .ok_or(AcexError::MathOverflow)?;
+        let payout = u64::try_from(payout_u128).map_err(|_| AcexError::MathOverflow)?;
         require!(payout > 0, AcexError::ZeroAmount);
         require!(ctx.accounts.series_vault_ata.amount >= payout, AcexError::InsufficientCollateral);
 
@@ -347,7 +361,7 @@ pub mod acex_capital {
         ];
         token::transfer(
             CpiContext::new_with_signer(
-                ctx.accounts.token_program.to_account_info(),
+                Token::id(),
                 Transfer {
                     from: ctx.accounts.series_vault_ata.to_account_info(),
                     to: ctx.accounts.buyer_ata.to_account_info(),
@@ -372,6 +386,7 @@ pub mod acex_capital {
 
     pub fn initialize_audit_pool(ctx: Context<InitializeAuditPool>, audit_fee_bps: u16) -> Result<()> {
         require!(!ctx.accounts.config.paused, AcexError::Paused);
+        require!(audit_fee_bps <= 10_000, AcexError::InvalidAuditFee);
         let pool = &mut ctx.accounts.audit_pool;
         require!(!pool.initialized, AcexError::AlreadyInitialized);
         pool.initialized = true;
@@ -388,7 +403,7 @@ pub mod acex_capital {
 
         token::transfer(
             CpiContext::new(
-                ctx.accounts.token_program.to_account_info(),
+                Token::id(),
                 Transfer {
                     from: ctx.accounts.auditor_ata.to_account_info(),
                     to: ctx.accounts.pool_vault_ata.to_account_info(),
@@ -424,7 +439,7 @@ pub mod acex_capital {
         let seeds: &[&[u8]] = &[b"audit_pool_vault", &[ctx.bumps.pool_vault_authority]];
         token::transfer(
             CpiContext::new_with_signer(
-                ctx.accounts.token_program.to_account_info(),
+                Token::id(),
                 Transfer {
                     from: ctx.accounts.pool_vault_ata.to_account_info(),
                     to: ctx.accounts.auditor_ata.to_account_info(),
@@ -458,15 +473,24 @@ pub mod acex_capital {
         let stake = &mut ctx.accounts.auditor_stake;
         require!(stake.auditor == ctx.accounts.auditor.key(), AcexError::Unauthorized);
         let free = stake.staked.saturating_sub(stake.locked_stake);
-        require!(cover_amount <= free, AcexError::InsufficientFreeStake);
         require!(stake.staked >= MIN_AUDIT_STAKE_USDC, AcexError::InsufficientStake);
 
+        require!(!ctx.accounts.listing_audit.defaulted, AcexError::AlreadyDefaulted);
+        let coverage = &mut ctx.accounts.coverage;
+        require!(
+            coverage.phase == CoveragePhase::Open as u8
+                || coverage.phase == CoveragePhase::Insuring as u8,
+            AcexError::InvalidCoveragePhase
+        );
+        let added_cover = cover_amount
+            .checked_sub(coverage.cover_amount)
+            .ok_or(AcexError::InsufficientCollateral)?;
+        require!(added_cover <= free, AcexError::InsufficientFreeStake);
         stake.locked_stake = stake
             .locked_stake
-            .checked_add(cover_amount)
+            .checked_add(added_cover)
             .ok_or(AcexError::MathOverflow)?;
 
-        let coverage = &mut ctx.accounts.coverage;
         if coverage.listing_id == [0u8; 32] {
             coverage.listing_id = listing_id;
             coverage.auditor = ctx.accounts.auditor.key();
@@ -484,7 +508,7 @@ pub mod acex_capital {
         }
         audit_state.total_cover = audit_state
             .total_cover
-            .checked_add(cover_amount)
+            .checked_add(added_cover)
             .ok_or(AcexError::MathOverflow)?;
         audit_state.aggregate_score_bps = score_bps;
 
@@ -515,7 +539,7 @@ pub mod acex_capital {
 
         token::transfer(
             CpiContext::new(
-                ctx.accounts.token_program.to_account_info(),
+                Token::id(),
                 Transfer {
                     from: ctx.accounts.funder_ata.to_account_info(),
                     to: ctx.accounts.pool_vault_ata.to_account_info(),
@@ -560,7 +584,7 @@ pub mod acex_capital {
         let seeds: &[&[u8]] = &[b"audit_pool_vault", &[ctx.bumps.pool_vault_authority]];
         token::transfer(
             CpiContext::new_with_signer(
-                ctx.accounts.token_program.to_account_info(),
+                Token::id(),
                 Transfer {
                     from: ctx.accounts.pool_vault_ata.to_account_info(),
                     to: ctx.accounts.auditor_ata.to_account_info(),
@@ -585,6 +609,12 @@ pub mod acex_capital {
         twap_price_e6: u64,
     ) -> Result<()> {
         require!(!ctx.accounts.config.paused, AcexError::Paused);
+        require_keys_eq!(
+            ctx.accounts.observer.key(),
+            ctx.accounts.config.admin,
+            AcexError::Unauthorized
+        );
+        require!(baseline_price_e6 > 0 && twap_price_e6 > 0, AcexError::ZeroAmount);
         let audit_state = &mut ctx.accounts.listing_audit;
         if audit_state.listing_id == [0u8; 32] {
             audit_state.listing_id = listing_id;
@@ -609,7 +639,6 @@ pub mod acex_capital {
     ) -> Result<()> {
         require!(!ctx.accounts.config.paused, AcexError::Paused);
         let audit_state = &mut ctx.accounts.listing_audit;
-        require!(!audit_state.defaulted, AcexError::AlreadyDefaulted);
         require!(audit_state.baseline_price_e6 > 0, AcexError::BaselineNotSet);
         require!(audit_state.twap_price_e6 > 0, AcexError::DefaultConditionsNotMet);
 
@@ -619,20 +648,32 @@ pub mod acex_capital {
             .ok_or(AcexError::MathOverflow)?
             .checked_div(audit_state.baseline_price_e6 as u128)
             .ok_or(AcexError::MathOverflow)?) as u16;
-        require!(drawdown_bps >= DEFAULT_DROP_BPS, AcexError::DefaultConditionsNotMet);
+        require!(
+            audit_state.defaulted || drawdown_bps >= DEFAULT_DROP_BPS,
+            AcexError::DefaultConditionsNotMet
+        );
 
         audit_state.defaulted = true;
         let coverage = &mut ctx.accounts.coverage;
         require!(coverage.auditor == slashed_auditor, AcexError::Unauthorized);
-        if coverage.phase == CoveragePhase::Insuring as u8 {
-            coverage.phase = CoveragePhase::Slashed as u8;
-            let stake = &mut ctx.accounts.auditor_stake;
-            stake.locked_stake = stake.locked_stake.saturating_sub(coverage.cover_amount);
-            audit_state.compensation_pool = audit_state
-                .compensation_pool
-                .checked_add(coverage.cover_amount)
-                .ok_or(AcexError::MathOverflow)?;
-        }
+        require!(coverage.phase == CoveragePhase::Insuring as u8, AcexError::InvalidCoveragePhase);
+        coverage.phase = CoveragePhase::Slashed as u8;
+        let stake = &mut ctx.accounts.auditor_stake;
+        // Slashed collateral remains reserved in the vault and must not become
+        // withdrawable when its coverage lock is released.
+        stake.locked_stake = stake.locked_stake
+            .checked_sub(coverage.cover_amount)
+            .ok_or(AcexError::MathOverflow)?;
+        stake.staked = stake.staked
+            .checked_sub(coverage.cover_amount)
+            .ok_or(AcexError::MathOverflow)?;
+        audit_state.total_cover = audit_state.total_cover
+            .checked_sub(coverage.cover_amount)
+            .ok_or(AcexError::MathOverflow)?;
+        audit_state.compensation_pool = audit_state
+            .compensation_pool
+            .checked_add(coverage.cover_amount)
+            .ok_or(AcexError::MathOverflow)?;
 
         emit!(ListingDefaultTriggered {
             listing_id,
@@ -750,6 +791,7 @@ pub struct CoverageRecord {
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq)]
+#[borsh(use_discriminant = true)]
 pub enum CoveragePhase {
     Open = 0,
     Insuring = 1,
@@ -758,6 +800,7 @@ pub enum CoveragePhase {
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq)]
+#[borsh(use_discriminant = true)]
 pub enum ListingStatus {
     Pending = 0,
     UnderAudit = 1,
@@ -776,12 +819,14 @@ pub struct Initialize<'info> {
     pub config: Account<'info, ProgramConfig>,
     pub usdc_mint: Account<'info, Mint>,
     pub system_program: Program<'info, System>,
+    /// CHECK: canonical loader-owned ProgramData and upgrade authority checked in initialize.
+    pub program_data: UncheckedAccount<'info>,
 }
 
 #[derive(Accounts)]
 pub struct AdminOnly<'info> {
     pub admin: Signer<'info>,
-    #[account(seeds = [b"config"], bump, has_one = admin @ AcexError::Unauthorized)]
+    #[account(mut, seeds = [b"config"], bump, has_one = admin @ AcexError::Unauthorized)]
     pub config: Account<'info, ProgramConfig>,
 }
 
@@ -879,8 +924,9 @@ pub struct DepositCollateral<'info> {
         bump,
     )]
     pub vault_ata: Account<'info, TokenAccount>,
-    #[account(mut)]
+    #[account(mut, token::mint = config.usdc_mint, token::authority = depositor)]
     pub depositor_ata: Account<'info, TokenAccount>,
+    #[account(address = config.usdc_mint @ AcexError::InvalidMint)]
     pub usdc_mint: Account<'info, Mint>,
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
@@ -972,8 +1018,9 @@ pub struct BuyCapsenseOption<'info> {
         bump,
     )]
     pub series_vault_ata: Account<'info, TokenAccount>,
-    #[account(mut)]
+    #[account(mut, token::mint = config.usdc_mint, token::authority = buyer)]
     pub buyer_ata: Account<'info, TokenAccount>,
+    #[account(address = config.usdc_mint @ AcexError::InvalidMint)]
     pub usdc_mint: Account<'info, Mint>,
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
@@ -1022,10 +1069,12 @@ pub struct ExerciseCapsenseOption<'info> {
             &strike_index_bps.to_le_bytes(),
             &expiry_ts.to_le_bytes(),
         ],
-        bump
+        bump,
+        token::mint = config.usdc_mint,
+        token::authority = series_vault_authority,
     )]
     pub series_vault_ata: Account<'info, TokenAccount>,
-    #[account(mut)]
+    #[account(mut, token::mint = config.usdc_mint, token::authority = buyer)]
     pub buyer_ata: Account<'info, TokenAccount>,
     pub token_program: Program<'info, Token>,
 }
@@ -1042,11 +1091,11 @@ pub struct ReleaseCollateral<'info> {
     /// CHECK: vault PDA
     #[account(seeds = [b"vault", listing_id.as_ref()], bump)]
     pub vault_authority: UncheckedAccount<'info>,
-    #[account(mut, seeds = [b"vault_ata", listing_id.as_ref()], bump)]
+    #[account(mut, seeds = [b"vault_ata", listing_id.as_ref()], bump, token::mint = config.usdc_mint, token::authority = vault_authority)]
     pub vault_ata: Account<'info, TokenAccount>,
     #[account(mut)]
     pub recipient: Signer<'info>,
-    #[account(mut)]
+    #[account(mut, token::mint = config.usdc_mint, token::authority = recipient)]
     pub recipient_ata: Account<'info, TokenAccount>,
     pub token_program: Program<'info, Token>,
 }
@@ -1079,6 +1128,7 @@ pub struct InitializeAuditPool<'info> {
         bump,
     )]
     pub pool_vault_ata: Account<'info, TokenAccount>,
+    #[account(address = config.usdc_mint @ AcexError::InvalidMint)]
     pub usdc_mint: Account<'info, Mint>,
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
@@ -1107,9 +1157,11 @@ pub struct StakeAudit<'info> {
         mut,
         seeds = [b"audit_pool_vault_ata"],
         bump,
+        token::mint = config.usdc_mint,
+        token::authority = pool_vault_authority,
     )]
     pub pool_vault_ata: Account<'info, TokenAccount>,
-    #[account(mut)]
+    #[account(mut, token::mint = config.usdc_mint, token::authority = auditor)]
     pub auditor_ata: Account<'info, TokenAccount>,
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
@@ -1131,9 +1183,9 @@ pub struct UnstakeAudit<'info> {
     /// CHECK: vault authority
     #[account(seeds = [b"audit_pool_vault"], bump)]
     pub pool_vault_authority: UncheckedAccount<'info>,
-    #[account(mut, seeds = [b"audit_pool_vault_ata"], bump)]
+    #[account(mut, seeds = [b"audit_pool_vault_ata"], bump, token::mint = config.usdc_mint, token::authority = pool_vault_authority)]
     pub pool_vault_ata: Account<'info, TokenAccount>,
-    #[account(mut)]
+    #[account(mut, token::mint = config.usdc_mint, token::authority = auditor)]
     pub auditor_ata: Account<'info, TokenAccount>,
     pub token_program: Program<'info, Token>,
 }
@@ -1199,9 +1251,9 @@ pub struct FundAuditRewards<'info> {
     /// CHECK: vault authority
     #[account(seeds = [b"audit_pool_vault"], bump)]
     pub pool_vault_authority: UncheckedAccount<'info>,
-    #[account(mut, seeds = [b"audit_pool_vault_ata"], bump)]
+    #[account(mut, seeds = [b"audit_pool_vault_ata"], bump, token::mint = config.usdc_mint, token::authority = pool_vault_authority)]
     pub pool_vault_ata: Account<'info, TokenAccount>,
-    #[account(mut)]
+    #[account(mut, token::mint = config.usdc_mint, token::authority = funder)]
     pub funder_ata: Account<'info, TokenAccount>,
     pub token_program: Program<'info, Token>,
 }
@@ -1223,9 +1275,9 @@ pub struct ClaimAuditReward<'info> {
     /// CHECK: vault authority
     #[account(seeds = [b"audit_pool_vault"], bump)]
     pub pool_vault_authority: UncheckedAccount<'info>,
-    #[account(mut, seeds = [b"audit_pool_vault_ata"], bump)]
+    #[account(mut, seeds = [b"audit_pool_vault_ata"], bump, token::mint = config.usdc_mint, token::authority = pool_vault_authority)]
     pub pool_vault_ata: Account<'info, TokenAccount>,
-    #[account(mut)]
+    #[account(mut, token::mint = config.usdc_mint, token::authority = auditor)]
     pub auditor_ata: Account<'info, TokenAccount>,
     pub token_program: Program<'info, Token>,
 }
@@ -1447,4 +1499,68 @@ pub enum AcexError {
     BaselineNotSet,
     #[msg("Default conditions not met")]
     DefaultConditionsNotMet,
+    #[msg("Mint does not match the configured settlement mint")]
+    InvalidMint,
+    #[msg("Audit fee must be at most 10000 basis points")]
+    InvalidAuditFee,
+}
+
+/// Price quotes travel in the transaction, so the authority signature covers both
+/// their values and the buyer/series accounts. Extra accounts preserve the fixed ABI.
+fn require_quote_authority(
+    config: &ProgramConfig,
+    buyer: &Signer<'_>,
+    remaining: &[AccountInfo<'_>],
+) -> Result<()> {
+    require!(
+        buyer.key() == config.admin
+            || remaining.iter().any(|account| {
+                account.key() == config.admin && account.is_signer
+            }),
+        AcexError::Unauthorized
+    );
+    Ok(())
+}
+
+
+/// The singleton config belongs to the deployer's upgrade authority. Merely
+/// arriving first is not authority to choose the program's admin and treasury.
+fn validate_bootstrap_authority(program_data: &AccountInfo, authority: Pubkey) -> Result<()> {
+    let loader = anchor_lang::solana_program::bpf_loader_upgradeable::ID;
+    let expected = Pubkey::find_program_address(&[crate::ID.as_ref()], &loader).0;
+    require_keys_eq!(*program_data.key, expected, AcexError::Unauthorized);
+    require_keys_eq!(*program_data.owner, loader, AcexError::Unauthorized);
+    let data = program_data.try_borrow_data()?;
+    let state = ProgramData::try_deserialize(&mut &data[..])?;
+    require!(state.upgrade_authority_address == Some(authority), AcexError::Unauthorized);
+    Ok(())
+}
+
+#[cfg(test)]
+mod bootstrap_security {
+    use super::*;
+
+    fn check(key: Pubkey, owner: Pubkey, authority: Option<Pubkey>, signer: Pubkey) -> Result<()> {
+        let mut lamports = 1;
+        // Native UpgradeableLoaderState::ProgramData: enum u32, slot u64, Option<u8>, pubkey.
+        let mut data = 3u32.to_le_bytes().to_vec();
+        data.extend_from_slice(&0u64.to_le_bytes());
+        data.push(u8::from(authority.is_some()));
+        if let Some(authority) = authority { data.extend_from_slice(authority.as_ref()); }
+        let account = AccountInfo::new(&key, false, false, &mut lamports, &mut data, &owner, false);
+        validate_bootstrap_authority(&account, signer)
+    }
+
+    #[test]
+    fn only_the_real_program_upgrade_authority_can_initialize() {
+        let loader = anchor_lang::solana_program::bpf_loader_upgradeable::ID;
+        let expected = Pubkey::find_program_address(&[crate::ID.as_ref()], &loader).0;
+        let deployer = Pubkey::new_unique();
+        let attacker = Pubkey::new_unique();
+        assert!(check(expected, loader, Some(deployer), deployer).is_ok());
+        assert!(check(expected, loader, Some(deployer), attacker).is_err());
+        assert!(check(expected, loader, None, attacker).is_err());
+        assert!(check(Pubkey::new_unique(), loader, Some(attacker), attacker).is_err());
+        assert!(check(expected, crate::ID, Some(attacker), attacker).is_err());
+    }
 }

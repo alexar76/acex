@@ -110,6 +110,36 @@ contract AgentLendingPoolTest is Test {
         assertApproxEqAbs(pool.debtOf(listingId), 55_000e6, 5e6);
     }
 
+    function test_small_borrows_after_interest_cannot_mint_zero_debt() public {
+        _depositCollateral(100_000e6);
+        _lenderDeposit(500_000e6);
+        _borrow(50_000e6);
+        vm.warp(block.timestamp + 100);
+        pool.accrue();
+        uint256 debtBefore = pool.debtOf(listingId);
+        uint256 cashBefore = usdc.balanceOf(agent);
+        for (uint256 i = 0; i < 100; i++) _borrow(1);
+        assertEq(usdc.balanceOf(agent) - cashBefore, 100);
+        assertGe(pool.debtOf(listingId) - debtBefore, 100);
+    }
+
+    function test_tiny_repayment_never_takes_cash_without_reducing_debt() public {
+        _depositCollateral(100_000e6);
+        _lenderDeposit(500_000e6);
+        _borrow(50_000e6);
+        vm.warp(block.timestamp + 100);
+        pool.accrue();
+        uint256 debtBefore = pool.debtOf(listingId);
+        uint256 cashBefore = usdc.balanceOf(agent);
+        vm.startPrank(agent);
+        usdc.approve(address(pool), 1);
+        vm.expectRevert(AgentLendingPool.InvalidAmount.selector);
+        pool.repay(listingId, 1);
+        vm.stopPrank();
+        assertEq(pool.debtOf(listingId), debtBefore);
+        assertEq(usdc.balanceOf(agent), cashBefore);
+    }
+
     function test_full_repay_clears_debt_with_interest() public {
         _depositCollateral(100_000e6);
         _lenderDeposit(500_000e6);

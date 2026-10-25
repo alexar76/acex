@@ -3,6 +3,7 @@ name = "acex-capital"
 version = "0.1.0"
 description = "ACEX — Agent Listing Protocol + collateral vault on Solana"
 edition = "2021"
+rust-version = "1.89"
 
 [lib]
 crate-type = ["cdylib", "lib"]
@@ -14,7 +15,15 @@ no-idl = []
 no-log-ix-name = []
 cpi = ["no-entrypoint"]
 default = []
+idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
 
 [dependencies]
-anchor-lang = { version = "0.30.1", features = ["init-if-needed"] }
-anchor-spl = "0.30.1"
+anchor-lang = { version = "=1.2.1", features = ["init-if-needed"] }
+anchor-spl = "=1.2.1"
+
+[dev-dependencies]
+# The official syscall seam lets host tests execute the real Anchor entrypoint,
+# validate token CPI wire data and PDA signer seeds, without a live validator.
+solana-sysvar = "=3.1.1"
+aimarket-legacy-wire = { path = "../../../../../security/solana-wire" }
+sha2 = "=0.10.9"

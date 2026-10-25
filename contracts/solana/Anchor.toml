@@ -1,3 +1,7 @@
+[toolchain]
+anchor_version = "1.2.1"
+solana_version = "4.1.2"
+
 [features]
 seeds = false
 skip-lint = false
@@ -10,9 +14,6 @@ acex_capital = "9BkXiRFMB5bAMMqAXxTzaLPYspiGxoUTEeX8kih9ne73"
 
 [programs.mainnet]
 acex_capital = "9BkXiRFMB5bAMMqAXxTzaLPYspiGxoUTEeX8kih9ne73"
-
-[registry]
-url = "https://api.apr.dev"
 
 [provider]
 cluster = "Localnet"

@@ -45,13 +45,16 @@ fi
 
 TMP_KEYFILE=$(mktemp)
 chmod 600 "$TMP_KEYFILE"
+trap 'rm -f "$TMP_KEYFILE"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 if [[ "$RAW_KEY" == \[* ]]; then
   echo "$RAW_KEY" > "$TMP_KEYFILE"
 else
-  python3 -c "
-import json, base58
-print(json.dumps(list(base58.b58decode('$RAW_KEY'))))
-" > "$TMP_KEYFILE"
+  printf '%s' "$RAW_KEY" | python3 -c '
+import json, sys, base58
+print(json.dumps(list(base58.b58decode(sys.stdin.read()))))
+' > "$TMP_KEYFILE"
 fi
 RAW_KEY="REDACTED"
 

@@ -200,12 +200,14 @@ contract AgentLendingPool is ReentrancyGuard, Ownable, Pausable {
         if (L.status != IAgentListingRegistry.ListingStatus.Approved) revert InvalidListing();
 
         uint256 collateral = vault.availableCollateral(listingId);
-        uint256 newDebt = _debtStored(listingId) + amount;
+        // Borrowers must receive at least as much liability as cash. Flooring
+        // this conversion lets a small borrow mint zero debt after any interest.
+        uint256 scaled = Math.mulDiv(amount, RAY, borrowIndex, Math.Rounding.Ceil);
+        uint256 newDebt = Math.mulDiv(scaledDebt[listingId] + scaled, borrowIndex, RAY);
         // origination LTV: newDebt ≤ collateral * MAX_LTV
         if (newDebt * BPS > collateral * MAX_LTV_BPS) revert InsufficientCollateral();
         if (getCash() < amount) revert InsufficientLiquidity();
 
-        uint256 scaled = Math.mulDiv(amount, RAY, borrowIndex);
         scaledDebt[listingId] += scaled;
         totalScaledBorrow += scaled;
         listingBorrower[listingId] = msg.sender;
@@ -317,6 +319,8 @@ contract AgentLendingPool is ReentrancyGuard, Ownable, Pausable {
             scaled = cur;
         } else {
             scaled = Math.mulDiv(amount, RAY, borrowIndex);
+            // A payment that cannot remove one debt share must not take USDC.
+            if (scaled == 0) revert InvalidAmount();
             if (scaled > cur) scaled = cur;
         }
         scaledDebt[listingId] = cur - scaled;

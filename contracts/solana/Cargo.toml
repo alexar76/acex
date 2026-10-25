@@ -2,6 +2,12 @@
 members = ["programs/acex-capital"]
 resolver = "2"
 
+[patch.crates-io]
+anchor-lang = { path = "../../../security/vendor-rust/anchor-lang" }
+solana-instruction = { path = "../../../security/vendor-rust/solana-instruction" }
+solana-sysvar = { path = "../../../security/vendor-rust/solana-sysvar" }
+solana-zk-sdk = { path = "../../../security/vendor-rust/solana-zk-sdk" }
+
 [profile.release]
 overflow-checks = true
 lto = "fat"
